@@ -8,7 +8,12 @@ export function statePaths(root, name) {
   return { dir, run: join(dir, "run.json"), runs: join(dir, "runs"), logs: join(dir, "logs"), events: join(dir, "events.log"), watchPid: join(dir, "watch.pid"), watchLog: join(dir, "logs", "watch.log"), local: join(dir, "local.json") };
 }
 export function ensureDirs(paths) { for (const d of [paths.dir, paths.runs, paths.logs]) mkdirSync(d, { recursive: true }); }
-export function readJson(path, fallback = null) { return existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : fallback; }
+/** A corrupt run.json or local.json is undiagnosable from the judge's side unless the throw names it. */
+export function readJson(path, fallback = null) {
+  if (!existsSync(path)) return fallback;
+  const text = readFileSync(path, "utf8");
+  try { return JSON.parse(text); } catch (e) { throw new Error(`${path}: ${e.message}`); }
+}
 export function writeJson(path, value) { writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`); }
 export function loadRun(paths) { return readJson(paths.run, null); }
 export function saveRun(paths, run) { writeJson(paths.run, run); }

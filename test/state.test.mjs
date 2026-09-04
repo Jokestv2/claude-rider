@@ -1,10 +1,10 @@
 // test/state.test.mjs
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { appendEvent, chainCost, chainResumes, consecutiveRateLimitResumes, currentSession, endRun, ensureDirs, lastEndedRun, loadLocal, loadRun, newRun, readEvents, saveRun, statePaths, totalCost, writeLog } from "../scripts/lib/state.mjs";
+import { appendEvent, chainCost, chainResumes, consecutiveRateLimitResumes, currentSession, endRun, ensureDirs, lastEndedRun, loadLocal, loadRun, newRun, readEvents, readJson, saveRun, statePaths, totalCost, writeLog } from "../scripts/lib/state.mjs";
 
 const now = new Date("2026-09-03T12:00:00Z");
 const R = (phase, id, { cost = null, resumedFrom = null, resumeReason = null, at = null } = {}) => ({ phase, id, cost, resumedFrom, resumeReason, at, outcome: "done" });
@@ -29,6 +29,19 @@ test("a run is created, saved, ended into runs/, and found again as the last end
   const log = writeLog(paths, "x.json", { a: 1 });
   assert.ok(existsSync(log));
   assert.deepEqual(loadLocal(paths), { maxWaitHours: 6, pollSeconds: 30, models: {}, advisor: null, claudePath: null, shell: null, permissionMode: "auto" });
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("a corrupt state file names itself in the error", () => {
+  const root = mkdtempSync(join(tmpdir(), "rider-state-"));
+  const paths = statePaths(root, "lemmaria");
+  ensureDirs(paths);
+  writeFileSync(paths.run, "{ not json");
+  assert.throws(() => loadRun(paths), (e) => e.message.includes(paths.run) && /run\.json/.test(e.message));
+  writeFileSync(paths.local, "]");
+  assert.throws(() => loadLocal(paths), (e) => e.message.includes(paths.local));
+  rmSync(paths.local, { force: true });
+  assert.deepEqual(readJson(paths.local, { a: 1 }), { a: 1 }); // a missing file is still the fallback
   rmSync(root, { recursive: true, force: true });
 });
 
