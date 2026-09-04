@@ -1,0 +1,92 @@
+// test/verbs-start.test.mjs
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { existsSync, readdirSync } from "node:fs";
+import { join } from "node:path";
+import { start } from "../scripts/lib/verbs.mjs";
+import { FakeBinding } from "./fake-binding.mjs";
+import { TEST_RIDER_MD, makeCtx, tmpProject } from "./helpers.mjs";
+
+test("a fresh start runs intake, creates run.json, launches the start phase, spawns the watcher", () => {
+  const p = tmpProject();
+  let spawned = 0;
+  const binding = new FakeBinding({ script: [{ statuses: ["running"] }] });
+  const ctx = makeCtx({ root: p.root, binding, spawnWatcher: () => { spawned++; return true; } });
+  const r = start(ctx);
+  assert.equal(r.ok, true);
+  assert.equal(r.state, "running");
+  assert.equal(r.phase, "plan");
+  assert.equal(r.visit, 1);
+  assert.equal(r.model, "fable");
+  assert.equal(r.session.shortId, "s1");
+  assert.match(r.attach, /claude attach s1/);
+  const run = ctx.loadRun();
+  assert.equal(run.rider, "lemmaria");
+  assert.match(run.runId, /^[0-9a-f]{4}$/);
+  assert.deepEqual(run.visits, { plan: 1 });
+  assert.equal(run.sessions.length, 1);
+  assert.deepEqual([run.sessions[0].outcome, run.sessions[0].resumedFrom, run.sessions[0].baselineTurns, run.sessions[0].watcherSpawns], ["running", null, 0, 1]);
+  assert.equal(spawned, 1);
+  const launch = binding.calls[0];
+  assert.equal(launch.prompt, "PLAN PROMPT");
+  assert.equal(launch.name, `rider lemmaria/${run.runId} plan`);
+  assert.equal(launch.cwd, p.root);
+  p.cleanup();
+});
+
+test("start names a phase as an operator override; a human or unknown phase is refused", () => {
+  const p = tmpProject();
+  const binding = new FakeBinding({ script: [{}] });
+  const ctx = makeCtx({ root: p.root, binding });
+  assert.match(start(ctx, { phase: "merge" }).error, /human phase/);
+  assert.match(start(ctx, { phase: "ship" }).error, /no phase "ship"/);
+  assert.equal(ctx.loadRun(), null);
+  assert.equal(start(ctx, { phase: "build" }).phase, "build");
+  assert.equal(binding.calls[0].prompt, "BUILD PROMPT");
+  p.cleanup();
+});
+
+test("intake refuses before any launch and names the command", () => {
+  const p = tmpProject({ riderMd: TEST_RIDER_MD.replace("  - test -d riders", "  - test -d riders\n  - exit 3") });
+  const binding = new FakeBinding({ script: [{}] });
+  const r = start(makeCtx({ root: p.root, binding }));
+  assert.equal(r.ok, false);
+  assert.match(r.error, /intake check failed \(exit 3\): exit 3/);
+  assert.equal(binding.calls.length, 0);
+  assert.equal(existsSync(join(p.root, ".rider", "lemmaria", "run.json")), false);
+  p.cleanup();
+});
+
+test("a second start on an active run is refused", () => {
+  const p = tmpProject();
+  const ctx = makeCtx({ root: p.root, binding: new FakeBinding({ script: [{}, {}] }) });
+  start(ctx);
+  assert.match(start(ctx).error, /is active at phase plan/);
+  p.cleanup();
+});
+
+test("per-phase model override from local.json; dry-run launches nothing", () => {
+  const p = tmpProject();
+  const binding = new FakeBinding({ script: [{}] });
+  const ctx = makeCtx({ root: p.root, binding, local: { models: { plan: "haiku" } } });
+  const d = start(ctx, { dryRun: true });
+  assert.equal(d.state, "dry-run");
+  assert.deepEqual(d.argv.slice(0, 3), ["fake", "--model", "haiku"]);
+  assert.equal(binding.calls.length, 0);
+  assert.equal(ctx.loadRun(), null);
+  assert.equal(start(ctx).model, "haiku");
+  p.cleanup();
+});
+
+test("a launch failure ends the run at operator with the reason", () => {
+  const p = tmpProject();
+  const binding = new FakeBinding({ script: [] }); // exhausted → launch throws
+  const ctx = makeCtx({ root: p.root, binding });
+  const r = start(ctx);
+  assert.equal(r.ok, false);
+  assert.match(r.error, /launch failed: fake binding: script exhausted/);
+  assert.equal(ctx.loadRun(), null);
+  assert.equal(readdirSync(join(p.root, ".rider", "lemmaria", "runs")).length, 1);
+  assert.equal(ctx.lastEndedRun().endedBy, "operator");
+  p.cleanup();
+});
