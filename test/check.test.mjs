@@ -71,6 +71,29 @@ test("gone needs two sightings", () => {
   p.cleanup();
 });
 
+test("a session the registry stopped listing is not gone while its transcript advances", () => {
+  const { ctx, binding, p } = setup([{ statuses: ["running", "gone"], read: { turns: 5, lastText: "working" } }]);
+  const orig = binding.read.bind(binding);
+  let extra = 0;
+  binding.read = (ids) => { const h = orig(ids); h.turns = 5 + extra++; return h; };
+  assert.equal(check(ctx).state, "running"); // records turns 5
+  const second = check(ctx);
+  assert.equal(second.state, "running");
+  assert.match(second.note, /transcript advanced/);
+  assert.equal(ctx.loadRun().sessions[0].goneSightings, 0);
+  assert.equal(check(ctx).state, "running");
+  assert.equal(ctx.loadRun().sessions[0].goneSightings, 0);
+  p.cleanup();
+});
+
+test("two gone sightings with a static transcript are still gone", () => {
+  const { ctx, p } = setup([{ statuses: ["running", "gone"], read: { turns: 5, lastText: "working" } }]);
+  assert.equal(check(ctx).state, "running");
+  assert.match(check(ctx).note, /not listed once/);
+  assert.equal(check(ctx).state, "gone");
+  p.cleanup();
+});
+
 test("waiting carries the question; a STATUS line with no question is done", () => {
   const q = { questions: [{ question: "A or B?", header: "Choice", options: [{ label: "A" }, { label: "B" }] }] };
   const a = setup([{ statuses: ["waiting"], read: { question: q, lastText: "Which?" } }]);

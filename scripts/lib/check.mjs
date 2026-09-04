@@ -35,7 +35,14 @@ export function check(ctx) {
   const elapsed = ctx.now().getTime() - new Date(sess.at).getTime();
   let note = null;
 
-  if (kind === "gone") {
+  // A failing `claude agents` reads as `gone` on every session at once, and two such polls would fork a
+  // paid session on the next `rider resume`. The transcript is the tie-breaker: one still writing turns
+  // is not gone. A session with no recorded turns yet (never seen running) keeps the two-sighting rule.
+  if (kind === "gone" && sess.turns != null && h.turns > sess.turns) {
+    kind = "running";
+    sess.goneSightings = 0;
+    note = "not listed, but the transcript advanced";
+  } else if (kind === "gone") {
     sess.goneSightings = (sess.goneSightings ?? 0) + 1;
     if (sess.goneSightings < 2) { kind = "running"; note = "not listed once; confirming on the next check"; }
   } else sess.goneSightings = 0;
