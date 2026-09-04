@@ -35,6 +35,13 @@ test("a listed session is resumed BARE; an unlisted one gets its options again",
   assert.equal(r.sessionId, "full-id-1");
 });
 
+test("a spawn error names the binary instead of a null exit", () => {
+  const enoent = () => ({ status: null, stdout: undefined, stderr: undefined, error: Object.assign(new Error("spawn claude-x ENOENT"), { code: "ENOENT" }) });
+  const b = createBinding({ claudePath: "claude-x", exec: enoent, sleep: () => {} });
+  assert.throws(() => b.launch("P", { model: "m", name: "n", cwd: "/p" }), /spawn claude-x ENOENT/);
+  assert.throws(() => b.status({ shortId: "x", sessionId: null }), /cannot run claude-x: .*ENOENT.*local\.json/);
+});
+
 test("launch failure throws with the CLI's words", () => {
   const b = createBinding({ exec: (c, a) => ({ status: 1, stdout: "", stderr: "unknown flag --bg" }), sleep: () => {} });
   assert.throws(() => b.launch("P", { model: "m", name: "n", cwd: "/p" }), /unknown flag --bg/);

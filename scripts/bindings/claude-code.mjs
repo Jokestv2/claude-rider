@@ -157,6 +157,8 @@ export function createBinding({ claudePath = null, advisor = null, permissionMod
   const claude = (args, opts = {}) => exec(exe, args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 120_000, maxBuffer: 64 * 1024 * 1024, windowsHide: true, ...opts });
   const agents = () => {
     const r = claude(["agents", "--json", "--all"]);
+    // A missing binary is configuration, not a transient: say so instead of reporting every session gone.
+    if (r.error?.code === "ENOENT") throw new Error(`cannot run ${exe}: ${r.error.message} — set claudePath in .rider/<name>/local.json`);
     try { const v = JSON.parse(r.stdout ?? ""); return Array.isArray(v) ? v : []; } catch { return []; }
   };
   const common = ({ model, name }) => ["--bg", "-n", name, "--model", model, "--permission-mode", permissionMode || "auto", "--append-system-prompt", SYSTEM_APPEND, ...(advisor ? ["--advisor", advisor] : [])];
@@ -165,7 +167,7 @@ export function createBinding({ claudePath = null, advisor = null, permissionMod
   const spawnBg = (argv, cwd) => {
     const r = claude(argv, { cwd });
     const launched = parseBgLaunch(r.stdout);
-    if (!launched) throw new Error((r.stderr || r.stdout || `claude exited ${r.status}`).trim());
+    if (!launched) throw new Error((r.error?.message || r.stderr || r.stdout || `claude exited ${r.status}`).trim());
     let entry = null;
     for (let i = 0; i < 30 && !entry; i++) { sleep(1000); entry = findEntry(agents(), { shortId: launched.shortId }); }
     return { shortId: launched.shortId, sessionId: entry?.sessionId ?? null, name: launched.name };
