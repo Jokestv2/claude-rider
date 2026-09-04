@@ -39,7 +39,9 @@ export function classifyRegistry(entry, alive) {
 }
 
 export function readTranscript(text) {
-  const out = { lastText: null, cost: null, costEntries: 0, question: null, turns: 0, userTurns: 0, signal: "", tail: [] };
+  // lastAt anchors the rate-limit reset: a reset parsed against `now` when the judge was down for
+  // hours reads as tomorrow, and the watcher would then sleep about a day for a limit already lifted.
+  const out = { lastText: null, lastAt: null, cost: null, costEntries: 0, question: null, turns: 0, userTurns: 0, signal: "", tail: [] };
   const signals = [];
   for (const line of String(text ?? "").split(/\r?\n/)) {
     if (!line.trim()) continue;
@@ -52,7 +54,7 @@ export function readTranscript(text) {
       const synthetic = d.isApiErrorMessage === true || d.message?.model === "<synthetic>";
       for (const b of content) {
         if (b.type === "text" && b.text) {
-          if (!synthetic) out.lastText = b.text;
+          if (!synthetic) { out.lastText = b.text; out.lastAt = typeof d.timestamp === "string" ? d.timestamp : null; }
           signals.push(b.text);
         }
         if (b.type === "tool_use" && b.name === "AskUserQuestion") out.question = b.input ?? null;

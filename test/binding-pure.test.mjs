@@ -63,7 +63,15 @@ test("synthetic entries never become the final reply but still reach the signal"
   assert.match(h.signal, /API Error: 529/);
   assert.equal(h.turns, 2);
   assert.equal(readTranscript(SYNTH).lastText, null);
-  assert.deepEqual(readTranscript(""), { lastText: null, cost: null, costEntries: 0, question: null, turns: 0, userTurns: 0, signal: "", tail: [] });
+  assert.deepEqual(readTranscript(""), { lastText: null, lastAt: null, cost: null, costEntries: 0, question: null, turns: 0, userTurns: 0, signal: "", tail: [] });
+});
+
+test("lastAt is the entry timestamp of the last real assistant text", () => {
+  const AT = (text, ts) => JSON.stringify({ type: "assistant", timestamp: ts, message: { content: [{ type: "text", text }] } });
+  const SYNTH_AT = JSON.stringify({ type: "assistant", timestamp: "2026-09-03T09:00:00.000Z", isApiErrorMessage: true, message: { model: "<synthetic>", content: [{ type: "text", text: "API Error: 529 overloaded" }] } });
+  assert.equal(readTranscript([U("p"), AT("first", "2026-09-03T01:00:00.000Z"), AT("second", "2026-09-03T02:00:00.000Z")].join("\n")).lastAt, "2026-09-03T02:00:00.000Z");
+  assert.equal(readTranscript([U("p"), AT("real", "2026-09-03T01:00:00.000Z"), SYNTH_AT].join("\n")).lastAt, "2026-09-03T01:00:00.000Z");
+  assert.equal(readTranscript([U("p"), A("an old transcript with no timestamp")].join("\n")).lastAt, null);
 });
 
 test("userTurns counts human-origin user messages only", () => {

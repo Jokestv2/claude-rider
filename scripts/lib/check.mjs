@@ -83,7 +83,10 @@ export function check(ctx) {
   let resetAt = null;
   sess.statusHint = statusHint(h.lastText);
   if (kind === "done" && !sess.statusHint) {
-    const f = ctx.binding.heuristics.classifyNoMarker(null, `${h.signal}\n${h.lastText ?? ""}`, ctx.now());
+    // Anchor the reset at the session's last turn, not at this check: the judge may have been down.
+    const lastAt = h.lastAt ? new Date(h.lastAt) : null;
+    const anchor = lastAt && !Number.isNaN(lastAt.getTime()) ? lastAt : ctx.now();
+    const f = ctx.binding.heuristics.classifyNoMarker(null, `${h.signal}\n${h.lastText ?? ""}`, anchor);
     if (f.kind === "rate-limited") {
       kind = "rate-limited";
       resetAt = f.resetAt ? f.resetAt.toISOString() : null;
@@ -101,7 +104,7 @@ export function check(ctx) {
   sess.intervened = sess.humanTurns > 0;
   sess.log = ctx.writeLog(`${sess.stoppedAt.replace(/[:.]/g, "-")}-${run.phase}-${sess.shortId ?? "id"}.json`, {
     runId: run.runId, phase: run.phase, ...ids, outcome: kind, entry: st.entry ?? null, resetAt,
-    cost: h.cost, turns: h.turns, userTurns: h.userTurns, question: h.question, lastText: h.lastText, signal: h.signal, transcript: h.transcript, tail: h.tail,
+    cost: h.cost, turns: h.turns, userTurns: h.userTurns, question: h.question, lastText: h.lastText, lastAt: h.lastAt ?? null, signal: h.signal, transcript: h.transcript, tail: h.tail,
   });
   ctx.saveRun(run);
   return result(ctx, run, sess, kind, h.lastText ?? "");

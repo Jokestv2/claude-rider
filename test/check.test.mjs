@@ -152,6 +152,15 @@ test("a STATUS line wins: the rate-limit classifier is consulted only when there
   p.cleanup();
 });
 
+test("the reset is anchored at the transcript's last turn, not at check time", () => {
+  // the judge was down for hours: a reset that has already passed must not parse as tomorrow
+  const { ctx, p } = setup([{ statuses: ["done"], read: { lastText: null, signal: "You've hit your session limit - resets 1:40am (UTC)", lastAt: "2026-09-03T01:00:00.000Z" } }]);
+  const r = check(ctx);
+  assert.equal(r.state, "rate-limited");
+  assert.equal(r.rateLimit.resetAt, "2026-09-03T01:40:00.000Z");
+  p.cleanup();
+});
+
 test("human turns after the launch prompt mean intervened", () => {
   const { ctx, p } = setup([{ statuses: ["done"], read: { lastText: GREEN, userTurns: 2 } }]);
   const r = check(ctx);

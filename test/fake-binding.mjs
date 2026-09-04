@@ -2,7 +2,7 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { classifyNoMarker, parseResetTime } from "../scripts/bindings/claude-code.mjs";
 
-const EMPTY_READ = { lastText: null, question: null, turns: 0, userTurns: 0, cost: null, costEntries: 0, signal: "", transcript: null, tail: [] };
+const EMPTY_READ = { lastText: null, lastAt: null, question: null, turns: 0, userTurns: 0, cost: null, costEntries: 0, signal: "", transcript: null, tail: [] };
 
 export class FakeBinding {
   name = "fake";
