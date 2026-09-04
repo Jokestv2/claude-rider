@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseCli } from "../scripts/rider.mjs";
@@ -51,10 +51,23 @@ test("start → check → next → … → human check through the CLI, --json a
   p.cleanup();
 });
 
-test("no rider, several riders, and --rider selection", () => {
+test("no rider, several riders, --rider selection, and the failures before dispatch", () => {
   const p = tmpProject();
-  const r = spawnSync(process.execPath, [RIDER, "status"], { cwd: join(p.root, "riders"), encoding: "utf8" });
+  const at = (cwd, ...args) => spawnSync(process.execPath, [RIDER, ...args], { cwd, encoding: "utf8", env: { ...process.env, RIDER_NO_WATCHER: "1" } });
+  const r = at(join(p.root, "riders"), "status");
   assert.equal(r.status, 2);
   assert.match(r.stderr, /no riders\/\*\/RIDER\.md/);
+  const nosuch = at(p.root, "status", "--rider", "nosuch");
+  assert.deepEqual([nosuch.status, /no rider named nosuch; have: lemmaria/.test(nosuch.stderr)], [2, true]);
+  mkdirSync(join(p.root, "riders", "other"));
+  writeFileSync(join(p.root, "riders", "other", "RIDER.md"), "---\nname: other\n---\n");
+  const several = at(p.root, "status");
+  assert.deepEqual([several.status, /several riders here: .* — pass --rider <name>/.test(several.stderr)], [2, true]);
+  const picked = at(p.root, "status", "--rider", "lemmaria");
+  assert.deepEqual([picked.status, /no active run/.test(picked.stdout)], [0, true]);
+  const bad = at(p.root, "await", "--rider", "lemmaria", "--max-minutes", "abc");
+  assert.deepEqual([bad.status, /--max-minutes must be a positive number/.test(bad.stderr)], [2, true]);
+  const nobinding = at(p.root, "status", "--rider", "lemmaria", "--binding", "./does-not-exist.mjs", "--json");
+  assert.deepEqual([nobinding.status, JSON.parse(nobinding.stdout).ok], [2, false]);
   p.cleanup();
 });
