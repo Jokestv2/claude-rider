@@ -46,14 +46,18 @@ export function currentSession(run) {
   for (let i = run.sessions.length - 1; i >= 0; i--) if (run.sessions[i].phase === run.phase) return run.sessions[i];
   return null;
 }
-/** The records that share one transcript with `rec`: rec and the earlier stretches it resumed, in order. */
+/** The records that share one transcript with `rec`: the earlier stretches it resumed, then rec itself (or its stored
+ *  twin, matched by id and start time when the caller holds a copy) — rec is always the LAST element. Throws when the
+ *  record is not in `sessions` at all: a silent empty chain would charge a resumed stretch the whole transcript's cost. */
 export function chainRecords(sessions, rec) {
-  const idx = sessions.indexOf(rec);
+  let idx = sessions.indexOf(rec);
+  if (idx < 0) idx = sessions.findIndex((x) => x.id === rec.id && x.at === rec.at);
+  if (idx < 0) throw new Error("chainRecords: the record is not in run.sessions");
   const ids = new Set([rec.id, rec.resumedFrom].filter(Boolean));
   const out = [];
   for (let i = idx; i >= 0; i--) {
     const x = sessions[i];
-    if (x === rec || (x.id && ids.has(x.id))) {
+    if (i === idx || (x.id && ids.has(x.id))) {
       out.unshift(x);
       if (x.id) ids.add(x.id);
       if (x.resumedFrom) ids.add(x.resumedFrom);
@@ -62,7 +66,7 @@ export function chainRecords(sessions, rec) {
   return out;
 }
 /** Claude Code's cost line is cumulative per session: a record is charged only its own stretch. */
-export function chainCost(sessions, rec) { return chainRecords(sessions, rec).filter((x) => x !== rec).reduce((a, x) => a + (x.cost ?? 0), 0); }
+export function chainCost(sessions, rec) { return chainRecords(sessions, rec).slice(0, -1).reduce((a, x) => a + (x.cost ?? 0), 0); }
 /** Nudges the rider itself typed into this transcript — subtracted from human-origin user turns. */
 export function chainResumes(sessions, rec) { return chainRecords(sessions, rec).filter((x) => x.resumedFrom).length; }
 export function consecutiveRateLimitResumes(sessions, phase) {

@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { appendEvent, chainCost, chainResumes, consecutiveRateLimitResumes, currentSession, endRun, ensureDirs, lastEndedRun, loadLocal, loadRun, newRun, readEvents, saveRun, statePaths, totalCost, writeLog } from "../scripts/lib/state.mjs";
 
 const now = new Date("2026-09-03T12:00:00Z");
-const R = (phase, id, { cost = null, resumedFrom = null, resumeReason = null } = {}) => ({ phase, id, cost, resumedFrom, resumeReason, outcome: "done" });
+const R = (phase, id, { cost = null, resumedFrom = null, resumeReason = null, at = null } = {}) => ({ phase, id, cost, resumedFrom, resumeReason, at, outcome: "done" });
 
 test("a run is created, saved, ended into runs/, and found again as the last ended run", () => {
   const root = mkdtempSync(join(tmpdir(), "rider-state-"));
@@ -40,7 +40,7 @@ test("currentSession is the last record of the current phase", () => {
 
 test("a record pays only for its own stretch; nudges are counted along the chain", () => {
   const first = R("plan", "a", { cost: 10 });
-  const second = R("plan", "a", { cost: null, resumedFrom: "a", resumeReason: "rate-limit" });
+  const second = R("plan", "a", { cost: null, resumedFrom: "a", resumeReason: "rate-limit", at: "t2" });
   const third = R("plan", "a", { resumedFrom: "a", resumeReason: "rate-limit" });
   const forked = R("plan", "z", { resumedFrom: "a", resumeReason: "judge" });
   const fresh = R("plan", "q");
@@ -49,6 +49,8 @@ test("a record pays only for its own stretch; nudges are counted along the chain
   assert.equal(chainResumes([first, second, third, forked], forked), 3);
   assert.equal(chainCost([first, second, forked], forked), 10);
   assert.equal(chainCost([first, fresh], fresh), 0);
+  assert.equal(chainCost([first, second], { ...second }), 10); // a copy of a stored record finds its twin by id + start time
+  assert.throws(() => chainCost([first, second], R("plan", "a", { at: "never" })), /not in run\.sessions/);
   assert.equal(chainResumes([first, fresh], fresh), 0);
   assert.equal(consecutiveRateLimitResumes([first, second, third], "plan"), 2);
   assert.equal(consecutiveRateLimitResumes([first, second, third, forked], "plan"), 0);
