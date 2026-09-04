@@ -15,6 +15,11 @@ test("parseCli", () => {
   assert.deepEqual(parseCli(["next", "code green", "--because", "why", "--json"]), { verb: "next", args: ["code green"], flags: { because: "why", json: true } });
   assert.deepEqual(parseCli([]), { verb: "status", args: [], flags: {} });
   assert.throws(() => parseCli(["--bogus"]));
+  // a --because value may start with a dash: parseArgs alone calls that ambiguous and refuses
+  assert.deepEqual(parseCli(["next", "blocked", "--because", "-x is missing"]), { verb: "next", args: ["blocked"], flags: { because: "-x is missing" } });
+  assert.deepEqual(parseCli(["next", "blocked", "--because", "--json"]), { verb: "next", args: ["blocked"], flags: { because: "--json" } });
+  assert.deepEqual(parseCli(["next", "blocked", "--because=-x"]), { verb: "next", args: ["blocked"], flags: { because: "-x" } });
+  assert.throws(() => parseCli(["next", "blocked", "--because"]), /argument missing/); // a trailing flag still refuses
 });
 
 test("isEntryPoint recognises the script it is asked about", () => {

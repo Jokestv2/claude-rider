@@ -28,9 +28,20 @@ const USAGE = `rider — drive riders/<name>/RIDER.md one phase at a time (run f
   --max-minutes N  await's deadline in minutes (default 60)  --binding <path>  another harness module (or RIDER_BINDING)
 exit: 0 ok · 2 refused or usage · 3 await timed out`;
 
+/** `--because "-x is missing"` is a value, not a flag; parseArgs alone calls it ambiguous and refuses.
+ *  The token after `--because` is always its value — a judge's reason is free text. */
+function joinBecause(argv) {
+  const out = [];
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === "--because" && i + 1 < argv.length) out.push(`--because=${argv[++i]}`);
+    else out.push(argv[i]);
+  }
+  return out;
+}
+
 export function parseCli(argv) {
   const { values, positionals } = parseArgs({
-    args: argv, allowPositionals: true,
+    args: joinBecause(argv), allowPositionals: true,
     options: { rider: { type: "string" }, because: { type: "string" }, json: { type: "boolean" }, "dry-run": { type: "boolean" }, "max-minutes": { type: "string" }, binding: { type: "string" }, help: { type: "boolean", short: "h" } },
   });
   const [verb = "status", ...args] = positionals;
