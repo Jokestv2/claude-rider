@@ -1,0 +1,10 @@
+{
+  "name": "rider",
+  "description": "Drive a project's rider (riders/<name>/RIDER.md) one phase at a time: judge each finished phase, pick the next edge, relay questions to the operator.",
+  "version": "0.1.0",
+  "author": { "name": "Ke Zhao", "url": "https://github.com/Jokestv2" },
+  "homepage": "https://github.com/Jokestv2/claude-rider",
+  "repository": "https://github.com/Jokestv2/claude-rider",
+  "license": "MIT",
+  "keywords": ["rider", "rider-engineering", "agent", "workflow", "milestone", "claude-code"]
+}

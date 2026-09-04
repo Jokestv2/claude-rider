@@ -1,0 +1,12 @@
+{
+  "name": "claude-rider",
+  "version": "0.1.0",
+  "description": "Rider engineering for Claude Code: a judge skill and a zero-dependency executor that drive a project's riders/<name>/RIDER.md one phase at a time",
+  "type": "module",
+  "bin": { "rider": "scripts/rider.mjs" },
+  "scripts": { "test": "node --test", "smoke": "node smoke/smoke.mjs" },
+  "engines": { "node": ">=20" },
+  "license": "MIT",
+  "repository": "github:Jokestv2/claude-rider",
+  "files": ["scripts", "skills", ".claude-plugin", "README.md", "LICENSE"]
+}

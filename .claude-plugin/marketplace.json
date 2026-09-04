@@ -1,0 +1,8 @@
+{
+  "name": "claude-rider",
+  "owner": { "name": "Ke Zhao" },
+  "metadata": { "description": "The claude-rider plugin", "version": "0.1.0" },
+  "plugins": [
+    { "name": "rider", "source": "./", "description": "Rider engineering for Claude Code: judge skill + executor", "category": "workflow", "tags": ["rider", "workflow", "agent"] }
+  ]
+}

@@ -1,2 +1,4 @@
 # Design notes for the rider itself stay local; the repo ships only the plugin.
 docs/
+node_modules/
+.rider/
