@@ -141,3 +141,44 @@ export function classifyNoMarker(json, text, now = new Date()) {
 // (created in this task) and are re-exported here for the binding's own use.
 export { isAlive, sleepSync } from "../lib/proc.mjs";
 import { isAlive, sleepSync } from "../lib/proc.mjs";
+
+/** The default executable: v2 pinned `~/.local/bin/claude.exe` on Windows because spawnSync does
+ * not resolve `.cmd` shims; `local.json`'s `claudePath` overrides. */
+export function defaultClaudePath() {
+  if (process.platform === "win32") {
+    const p = join(homedir(), ".local", "bin", "claude.exe");
+    if (existsSync(p)) return p;
+  }
+  return "claude";
+}
+
+export function createBinding({ claudePath = null, advisor = null, permissionMode = "auto", projectsDir = join(homedir(), ".claude", "projects"), exec = spawnSync, alive = isAlive, sleep = sleepSync } = {}) {
+  const exe = claudePath || defaultClaudePath();
+  const claude = (args, opts = {}) => exec(exe, args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 120_000, maxBuffer: 64 * 1024 * 1024, windowsHide: true, ...opts });
+  const agents = () => {
+    const r = claude(["agents", "--json", "--all"]);
+    try { const v = JSON.parse(r.stdout ?? ""); return Array.isArray(v) ? v : []; } catch { return []; }
+  };
+  const common = ({ model, name }) => ["--bg", "-n", name, "--model", model, "--permission-mode", permissionMode || "auto", "--append-system-prompt", SYSTEM_APPEND, ...(advisor ? ["--advisor", advisor] : [])];
+  const launchArgv = (prompt, o) => [...common(o), prompt];
+  const resumeArgv = (sessionId, o) => (o.listed ? ["--bg", "--resume", sessionId, RESUME_NUDGE] : [...common(o), "--resume", sessionId, RESUME_NUDGE]);
+  const spawnBg = (argv, cwd) => {
+    const r = claude(argv, { cwd });
+    const launched = parseBgLaunch(r.stdout);
+    if (!launched) throw new Error((r.stderr || r.stdout || `claude exited ${r.status}`).trim());
+    let entry = null;
+    for (let i = 0; i < 30 && !entry; i++) { sleep(1000); entry = findEntry(agents(), { shortId: launched.shortId }); }
+    return { shortId: launched.shortId, sessionId: entry?.sessionId ?? null, name: launched.name };
+  };
+  return {
+    name: "claude-code",
+    launch: (prompt, { model, name, cwd }) => spawnBg(launchArgv(prompt, { model, name }), cwd),
+    resume: (sessionId, { listed, model, name, cwd }) => { const r = spawnBg(resumeArgv(sessionId, { listed, model, name }), cwd); return { ...r, sessionId: r.sessionId ?? sessionId }; },
+    status: (ids) => { const entry = findEntry(agents(), ids); return { kind: classifyRegistry(entry, alive), entry, listed: !!entry }; },
+    read: (ids) => { const p = findTranscript(projectsDir, ids.sessionId); return { ...readTranscript(p ? readFileSync(p, "utf8") : ""), transcript: p }; },
+    stop: (ids) => { claude(["stop", ids.shortId ?? ids.sessionId]); },
+    attachHint: (ids) => `claude attach ${ids.shortId ?? ids.sessionId}   (or ← for agents)`,
+    dryRun: { claudePath: exe, launchArgv, resumeArgv },
+    heuristics: { classifyNoMarker, parseResetTime },
+  };
+}
