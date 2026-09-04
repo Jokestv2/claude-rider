@@ -30,7 +30,7 @@ For by-hand use outside a session the executor is also `npm i -g`-able (`package
 
 Create `riders/<name>/RIDER.md` plus one prompt file per session phase. Riders are discovered as
 `riders/*/RIDER.md` under the project root — the discovery rule of skills — so a project may have
-several; pass `--rider <name>` when it does.
+several; pass `--rider <directory name>` when it does.
 
 ```
 riders/lemmaria/
@@ -44,12 +44,14 @@ riders/lemmaria/
 
 | Key | Required | Meaning |
 |---|---|---|
-| `name` | yes | Identifier; also the session-name prefix and the state directory name. Letters, digits and dashes |
+| `name` | yes | Identifier; also the session-name prefix and the state directory name. Letters, digits and dashes. Usually equal to the directory name; `--rider` matches the directory |
 | `start` | yes | The session phase a fresh run begins at (`rider start <phase>` overrides it) |
 | `phases` | yes | Map of phase name → phase (below) |
 | `intake` | no | List of shell commands; **all must exit 0** before a fresh run may start. The only mechanical refusal that fires before any model runs |
 | `evidence` | no | List of shell commands whose output rides along with every `check` return. Informs the judge; never refuses anything |
 | `limits.visits` | no | Maximum times a run may enter the same phase (default 3). Exceeding it stops the run at `operator`. Rate-limit resumes are counted separately |
+
+Written as a nested map: `limits: { visits: 3 }` — a literal `limits.visits:` key is ignored.
 
 A **phase** is either a *session phase* or a *human phase*:
 
@@ -75,7 +77,8 @@ Two names are reserved and never declared as phases or as edge labels:
 The graph is validated when the rider loads, and an invalid rider is refused with the reason before
 anything runs: every edge target is a declared phase or `operator`; `start` names a declared session
 phase; a human phase has a `check`; a session phase has a `model`, non-empty `edges`, and a prompt
-file that exists; `limits.visits` is a positive integer.
+file that exists; `limits.visits` is a positive integer; `operator` and `resume` are not used as
+phase names or edge labels; `intake` and `evidence` are lists of strings.
 
 The **body** of `RIDER.md` is prose for the judge — the task class and its terminal condition, what
 each outcome label means, what a blocked stop looks like. It is never sent to a phase session; the
@@ -204,7 +207,8 @@ State lives under `.rider/<name>/` at the project root:
 ```
 .rider/lemmaria/
   run.json        the active run: phase, visits, transitions, sessions, notes
-  runs/           finished runs, one file each (<startedAt>-<runId>.json)
+  runs/           finished runs, one file each, named by start time (`:` and `.` written as `-`)
+                  and run id
   logs/           one harvest per session stop: ids, registry entry, outcome, cost, turns,
                   question, final text, transcript path, transcript tail
   logs/watch.log  the detached watcher's own output
@@ -246,15 +250,26 @@ writer wins; the design accepts this.
 ## Verified on
 
 The claims the design leaves to be checked against a real install and a real account, filled in at
-release:
+release (§ numbers refer to the design notes, which are not shipped in this repo):
 
 | Claim | Where | Verified | Result |
 |---|---|---|---|
-| `/rider` resolves (or only `/rider:rider`) | §3.4 | date, harness version | |
-| `${CLAUDE_PLUGIN_ROOT}` expands in the skill's Bash calls; which allowlist line prevents prompts | §3.4 | | |
-| The detached watcher outlives its spawning process | §4.6 | smoke #5 | |
-| A backgrounded `rider await` wakes the judge | §3.3 | step 3 | |
-| Git Bash runs the worked example's POSIX commands on Windows | §7 | `test/shell.test.mjs` | |
+| `/rider` resolves (or only `/rider:rider`) | §3.4 | 2026-09-04, Claude Code 2.1.260 | **PASS for `/rider:rider`** — a session launched with that prompt expanded the skill (the turn carries `<command-name>/rider:rider</command-name>` followed by the SKILL.md body) and went on to run the executor. Bare `/rider` was **not tried**, so it stays unverified; `plugin details rider` lists the component as `rider` |
+| `${CLAUDE_PLUGIN_ROOT}` expands in the skill's Bash calls; which allowlist line prevents prompts | §3.4 | 2026-09-04, Claude Code 2.1.260 | **Expansion PASS** — it reached the skill body already substituted, as an absolute forward-slash path, and every `node "…/scripts/rider.mjs"` call ran. It is the plugin's *install root*: installed from a local `directory` marketplace that is the checkout itself, not the `~/.claude/plugins/cache/` copy. **The allowlist question is not discriminated** — under `--permission-mode auto` no prompt appeared, so neither line was exercised; both are kept above |
+| The detached watcher outlives its spawning process | §4.6 | `npm run smoke` (the two watcher assertions) | **PASS as measured** — it outlived `rider start`, a `spawnSync`'d process that had already exited, and appended the phase's `done` event. The same shape was seen again in the live judge session. It was **not** measured against a judge session's own exit |
+| A backgrounded `rider await` wakes the judge | §3.3 | a live judge session (below) | **PASS** — `rider await` was armed with the Bash tool's `run_in_background`, exited 0 carrying the watcher's event line at `08:50:33.380Z`, the completion notification reached the judge at `08:50:35.313Z` (**1.9 s**), and it then ran `status`, `check` and `next "done" --because …` with nobody typing |
+| Git Bash runs the worked example's POSIX commands on Windows | §7 | `test/shell.test.mjs` | **PASS offline** (77/77 on this machine). Offline evidence only: the smoke rider declares no `intake` or `evidence` and never enters its human phase, so no live run has put a POSIX line through the resolved shell |
+
+Three things the runs behind this table showed that are worth knowing:
+
+- The smoke's "a pending subagent keeps the session busy" assertion passes on **exactly one sample** by
+  design, and a detached-watcher tick landing inside its 3 s window would leave none — roughly a 10%
+  chance per run. A zero-sample run is a flake, not a regression.
+- On 2.1.260 `claude stop` leaves the session `gone`, not `done` (three runs of three, seen 10–15 s
+  after the stop). The smoke accepts either.
+- A phase that asks its question in prose instead of calling `AskUserQuestion` classifies as `waiting`
+  with 0 turns — 1 of 3 smoke runs here, 2 of 3 under the predecessor, and again in the live judge
+  session above. The judge relays it either way.
 
 ## License
 
