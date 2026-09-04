@@ -4,8 +4,8 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
-import { parseCli } from "../scripts/rider.mjs";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { isEntryPoint, parseCli } from "../scripts/rider.mjs";
 import { tmpProject } from "./helpers.mjs";
 
 const RIDER = fileURLToPath(new URL("../scripts/rider.mjs", import.meta.url));
@@ -15,6 +15,14 @@ test("parseCli", () => {
   assert.deepEqual(parseCli(["next", "code green", "--because", "why", "--json"]), { verb: "next", args: ["code green"], flags: { because: "why", json: true } });
   assert.deepEqual(parseCli([]), { verb: "status", args: [], flags: {} });
   assert.throws(() => parseCli(["--bogus"]));
+});
+
+test("isEntryPoint recognises the script it is asked about", () => {
+  const url = pathToFileURL(RIDER).href;
+  assert.equal(isEntryPoint(url, RIDER), true);
+  assert.equal(isEntryPoint(url, FAKE), false);
+  assert.equal(isEntryPoint(url, undefined), false);
+  assert.equal(isEntryPoint(url, join(RIDER, "..", "no-such-file.mjs")), false); // an unresolvable path must not throw
 });
 
 test("start → check → next → … → human check through the CLI, --json and text", () => {

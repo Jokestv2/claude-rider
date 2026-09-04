@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // scripts/rider.mjs — the executor's verbs (§4.1). Text out for the judge, --json for scripts.
-import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { pathToFileURL } from "node:url";
+import { existsSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { check } from "./lib/check.mjs";
 import { createContext } from "./lib/context.mjs";
@@ -98,4 +98,13 @@ function runWatch(ctx, paths, local, stdout) {
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main().then((code) => process.exit(code), (e) => { console.error(e.message); process.exit(2); });
+/** Was this file the entry point? A symlinked or junctioned install (`npm i -g`, a plugin cache copy)
+ *  hands argv[1] a path that never equals import.meta.url, so compare resolved paths too. */
+export function isEntryPoint(moduleUrl, argv1) {
+  if (!argv1) return false;
+  if (moduleUrl === pathToFileURL(argv1).href) return true;
+  const real = (p) => { try { return realpathSync(p); } catch { return p; } };
+  return real(fileURLToPath(moduleUrl)) === real(argv1);
+}
+
+if (isEntryPoint(import.meta.url, process.argv[1])) main().then((code) => process.exit(code), (e) => { console.error(e.message); process.exit(2); });
