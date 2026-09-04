@@ -56,7 +56,7 @@ check("rider await exited 0 with the waiting event", awaitCode === 0 && /waiting
 spawnSync(CLAUDE, ["stop", two.session.shortId], { stdio: "ignore", timeout: 60_000 });
 sleepSync(5000);
 const stoppedTwo = until((r) => r.state !== "waiting" && r.state !== "running", 60);
-check("a stopped asking session re-classifies as done with no status hint", stoppedTwo.state === "done" && stoppedTwo.statusHint === null, `${stoppedTwo.state} / ${stoppedTwo.statusHint}`);
+check("a stopped asking session re-classifies as stopped (gone by §5; done if the CLI marks it) with no status hint", ["gone", "done"].includes(stoppedTwo.state) && stoppedTwo.statusHint === null, `${stoppedTwo.state} / ${stoppedTwo.statusHint}`);
 rider("next", "operator", "--because", "smoke: skip to phase three");
 rider("start", "three");
 
