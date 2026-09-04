@@ -249,16 +249,18 @@ which criterion:
 Cost is charged per stretch: a resumed session's record carries only what its own stretch added.
 
 **Known limit:** `check` is not locked. A hand-run `rider check` and the watcher can classify the
-same stop at the same moment, and both write `run.json` — each from the copy it loaded, so the two
+same stop at the same moment, and both write `run.json` (so does the judge's backgrounded
+`rider await` when it respawns a dead watcher, a write of one counter) — each from the copy it loaded, so the two
 writes are not always the same content. The last writer wins, and it can drop a counter the other
 had just advanced (`goneSightings`, `signedOffTurns`) by one sighting. That costs at most one extra
 poll before the counter is earned again; the design accepts this.
 
 **Known limit:** the rate-limit wait lives in the watcher process. The resume at the reset is
-guaranteed only while that process lives; a watcher killed mid-wait resumes nothing by itself. The
-run is not stranded — the next `rider check`, or the judge's next `rider await` poll, respawns a
-watcher, which re-reads the stored `rateLimit.resetAt` and re-enters the wait — but the session
-stays rate-limited until one of those happens.
+guaranteed only while that process lives; a watcher killed mid-wait resumes nothing by itself, and
+nothing respawns one for it — `check` returns early for a session already recorded `rate-limited`,
+and `rider await` only watches a running or waiting one. The run is not stranded: `rider status`
+and `rider check` show `rate-limited` with the stored reset time, and `rider resume` starts a new
+stretch in the same session — the judge asks the operator before running it (see the skill).
 
 **Known limit:** a watcher whose `check` keeps failing can cycle. The watcher gives up after five
 consecutive `check` failures and appends a `watcher giving up: …` event; the judge that event wakes
