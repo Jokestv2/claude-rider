@@ -97,6 +97,15 @@ test("a busy session that signed off with no new turn across two checks is done"
   p.cleanup();
 });
 
+test("a resumed stretch does not sign off on the previous stretch's text", () => {
+  const { ctx, binding, p } = setup([{ statuses: ["running"], read: { lastText: GREEN, turns: 12 } }]);
+  const run = ctx.loadRun(); run.sessions[0].baselineTurns = 12; ctx.saveRun(run); // what `resume` records
+  assert.equal(check(ctx).state, "running");
+  assert.equal(check(ctx).state, "running");
+  assert.equal(binding.calls.filter((c) => c.call === "stop").length, 0);
+  p.cleanup();
+});
+
 test("no STATUS line: a rate limit (with its reset) vs an API error", () => {
   const a = setup([{ statuses: ["done"], read: { lastText: null, signal: "You've hit your session limit - resets 1:40am (UTC)" } }]);
   const r = check(a.ctx);

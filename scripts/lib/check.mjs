@@ -39,7 +39,9 @@ export function check(ctx) {
   }
 
   if (kind === "running" && note === null) {
-    if (signedOff(h.lastText)) {
+    // A sign-off counts only when THIS stretch wrote it: after a resume the transcript still ends with the
+    // previous stretch's green text, and turns have not moved past the resume baseline yet.
+    if (signedOff(h.lastText) && h.turns > (sess.baselineTurns ?? 0)) {
       if (sess.signedOffTurns === h.turns) { kind = "done"; sess.doneReason = "signed off; something it left running holds the process open"; }
       else sess.signedOffTurns = h.turns;
     } else sess.signedOffTurns = null;
@@ -104,7 +106,7 @@ function checkHuman(ctx, run, def) {
 }
 
 export function runEvidence(ctx) {
-  return ctx.rider.evidence.map((cmd) => ({ cmd, ...sh(cmd, { ...ctx.shellOpts(), capBytes: EVIDENCE_CAP }) }));
+  return ctx.rider.evidence.map((cmd) => ({ cmd, ...sh(cmd, { ...ctx.shellOpts(), capBytes: EVIDENCE_CAP, timeoutMs: 10_000 }) }));
 }
 
 function result(ctx, run, sess, outcome, finalText, note = null) {
