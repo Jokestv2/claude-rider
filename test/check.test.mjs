@@ -161,6 +161,15 @@ test("human turns after the launch prompt mean intervened", () => {
   p.cleanup();
 });
 
+test("a live session the operator typed into is still running: intervened is a stop-time outcome", () => {
+  const { ctx, p } = setup([{ statuses: ["running"], read: { userTurns: 3, lastText: "still working" } }]);
+  const r = check(ctx);
+  assert.equal(r.state, "running");
+  assert.equal(r.humanTurns, 2);
+  assert.equal(ctx.loadRun().sessions[0].intervened, true);
+  p.cleanup();
+});
+
 test("at a human phase: check fails → human with show; check passes → the run ends", () => {
   const p = tmpProject();
   const ctx = makeCtx({ root: p.root, binding: new FakeBinding() });
