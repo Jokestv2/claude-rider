@@ -260,6 +260,14 @@ run is not stranded — the next `rider check`, or the judge's next `rider await
 watcher, which re-reads the stored `rateLimit.resetAt` and re-enters the wait — but the session
 stays rate-limited until one of those happens.
 
+**Known limit:** a watcher whose `check` keeps failing can cycle. The watcher gives up after five
+consecutive `check` failures and appends a `watcher giving up: …` event; the judge that event wakes
+re-arms `rider await`, which respawns the watcher, which may fail five times again. Each cycle is
+bounded (about 2.5 minutes at the default poll), the sequence is not. A failure that persists also
+breaks the judge's own `rider check`, which reports and stops, so the cycle needs a failure that
+comes and goes. Repeated give-up events in `events.log` mean: read `.rider/<name>/logs/`, fix the
+cause (usually the `claude` CLI or a transcript the harness cannot read), then `rider check`.
+
 **Known limit:** the launch is not atomic. If the executor dies between the `claude` CLI creating
 the session and `run.json` being written, that session is orphaned — it keeps running, and paying,
 with nothing tracking it. It is listed by `claude agents`; remove it by hand (`claude stop <id>`).
@@ -270,7 +278,12 @@ with nothing tracking it. It is listed by `claude agents`; remove it by hand (`c
   binding that scripts session outcomes, plus the parsers, classifiers, graph validation, edge and
   intake refusals, the visit cap, and the loop-simulator scenarios.
 - `npm run smoke` — the live tier: the real binding against real sessions on haiku, a few cents.
-  Run by hand before a release, never under `node --test`.
+  Run by hand before a release, never under `node --test`. Last results: 17/17 at `be850e1`
+  (three runs on 2026-09-04, about $0.32 in total); 16/17 at `59c7d67` after the review fix wave
+  (2 min 33 s, about $0.12) — the one failure was the zero-sample flake on the pending-subagent
+  assertion described under *Verified on*, and every assertion that touches the changed code
+  passed. Not rerun: the binding gained two additive fields afterwards (`lastAt` in `12de44b`,
+  `stopHint` in `3bc1ea7`), covered offline, with no live run since.
 
 ## Verified on
 
