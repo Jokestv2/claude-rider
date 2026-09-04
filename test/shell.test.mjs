@@ -1,3 +1,4 @@
+// test/shell.test.mjs
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { capText, resolveShell, sh } from "../scripts/lib/shell.mjs";

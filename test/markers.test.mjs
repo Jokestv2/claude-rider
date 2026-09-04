@@ -1,3 +1,4 @@
+// test/markers.test.mjs
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { fmtCost, fmtDuration, formatFinal, formatQuestion, hasPromise, signedOff, statusHint, waitingIsDone } from "../scripts/lib/markers.mjs";
