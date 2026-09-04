@@ -13,6 +13,19 @@ const allPrompts = () => true;
 
 test("the worked example validates", () => assert.deepEqual(validateRider(data, allPrompts), []));
 
+test("a phase name that is not a safe token is refused", () => {
+  // phase names become path segments (the harvest log's file name) and event-line tokens
+  for (const name of ["../escape", "two words", "a/b", "phase.1"]) {
+    const bad = structuredClone(data);
+    bad.phases[name] = { model: "opus", edges: { planned: "build" } };
+    const errs = validateRider(bad, allPrompts);
+    assert.ok(errs.some((e) => e.startsWith(`phases.${name}: name must be`)), `expected a name error for "${name}"; got ${errs.join(" | ")}`);
+  }
+  const ok = structuredClone(data);
+  ok.phases["re_check-2"] = { model: "opus", edges: { planned: "build" } };
+  assert.deepEqual(validateRider(ok, allPrompts), []);
+});
+
 test("every structural error is named", () => {
   const bad = structuredClone(data);
   bad.start = "merge";                          // human start

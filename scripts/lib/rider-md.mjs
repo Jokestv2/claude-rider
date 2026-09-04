@@ -33,6 +33,8 @@ export function validateRider(data, promptExists) {
   if (!phases || typeof phases !== "object" || Array.isArray(phases)) return [...e, "phases: required mapping of phase name → phase"];
   const names = Object.keys(phases);
   for (const r of RESERVED) if (names.includes(r)) e.push(`phases.${r}: reserved name`);
+  // A phase name becomes a path segment (the harvest log's file name) and a token on the event line.
+  for (const n of names) if (!/^[A-Za-z0-9_-]+$/.test(n)) e.push(`phases.${n}: name must be letters, digits, underscores and dashes`);
   if (typeof data.start !== "string") e.push("start: required");
   else if (!names.includes(data.start)) e.push(`start: "${data.start}" is not a declared phase`);
   else if (phases[data.start]?.human === true) e.push(`start: "${data.start}" is a human phase`);

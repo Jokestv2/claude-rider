@@ -87,7 +87,8 @@ does not recognise reads `done` with "no STATUS line in the final message" — t
 and you resume the session by hand with `rider resume`.
 
 The graph is validated when the rider loads, and an invalid rider is refused with the reason before
-anything runs: every edge target is a declared phase or `operator`; `start` names a declared session
+anything runs: a phase name is letters, digits, underscores and dashes (it becomes a path segment and
+an event-line token); every edge target is a declared phase or `operator`; `start` names a declared session
 phase; a human phase has a `check`; a session phase has a `model`, non-empty `edges`, and a prompt
 file that exists; `limits.visits` is a positive integer; `operator` and `resume` are not used as
 phase names or edge labels; `intake` and `evidence` are lists of strings.
