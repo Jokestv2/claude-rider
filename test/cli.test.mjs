@@ -62,7 +62,7 @@ test("no rider, several riders, --rider selection, and the failures before dispa
   mkdirSync(join(p.root, "riders", "other"));
   writeFileSync(join(p.root, "riders", "other", "RIDER.md"), "---\nname: other\n---\n");
   const several = at(p.root, "status");
-  assert.deepEqual([several.status, /several riders here: .* — pass --rider <name>/.test(several.stderr)], [2, true]);
+  assert.deepEqual([several.status, /several riders here: .* — pass --rider <directory name>/.test(several.stderr)], [2, true]);
   const picked = at(p.root, "status", "--rider", "lemmaria");
   assert.deepEqual([picked.status, /no active run/.test(picked.stdout)], [0, true]);
   const bad = at(p.root, "await", "--rider", "lemmaria", "--max-minutes", "abc");

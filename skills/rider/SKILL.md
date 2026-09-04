@@ -14,6 +14,8 @@ between phases**. The graph is enforced by the executor: you can only pick a lab
 
 1. **Re-orient from the executor, never from chat memory.** Run `rider status`. The conversation
    autocompacts; `run.json` is the only memory.
+   Then read the body of `riders/<name>/RIDER.md` — the prose under the frontmatter — once per
+   invocation: it states the task class and what each label means, and you judge against that.
 2. Act on `state:`
    - **none** → `rider start`. If it refuses (an intake check failed), report the failing command
      and its output to the operator and stop. If it started a phase, arm the watch (step 3) and stop.

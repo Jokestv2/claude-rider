@@ -23,7 +23,7 @@ const USAGE = `rider — drive riders/<name>/RIDER.md one phase at a time (run f
   rider reset                         forget the active run (its record stays under .rider/<name>/runs/)
   rider watch                         the detached watcher itself (spawned by start/next/resume/check)
 
-  --rider <name>   when the project has several riders      --json   machine-readable output
+  --rider <directory name>   when the project has several riders   --json   machine-readable output
   --dry-run        start/next/resume print the harness command and run nothing
   --max-minutes N  await's deadline in minutes (default 60)  --binding <path>  another harness module (or RIDER_BINDING)
 exit: 0 ok · 2 refused or usage · 3 await timed out`;
@@ -49,7 +49,7 @@ export async function main(argv = process.argv.slice(2), { cwd = process.cwd(), 
   if (!found) {
     const have = riders.map((r) => r.name).join(", ");
     if (pick) return fail(`no rider named ${pick}; have: ${have || "none"}`);
-    return fail(riders.length ? `several riders here: ${have} — pass --rider <name>` : `no riders/*/RIDER.md under ${cwd}`);
+    return fail(riders.length ? `several riders here: ${have} — pass --rider <directory name>` : `no riders/*/RIDER.md under ${cwd}`);
   }
   const maxMinutes = Number(cli.flags["max-minutes"] ?? 60);
   if (!Number.isFinite(maxMinutes) || maxMinutes <= 0) return fail(`--max-minutes must be a positive number\n${USAGE}`);

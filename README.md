@@ -23,6 +23,13 @@ allowlist line to `~/.claude/settings.json` (or the project's `.claude/settings.
 { "permissions": { "allow": ["Bash(node */claude-rider/*/scripts/rider.mjs:*)"] } }
 ```
 
+Neither line has been exercised yet: the verification session ran under `--permission-mode auto`,
+so nothing prompted. Two shapes to be aware of if it does prompt — the judge's command begins
+`cd "<project>" && node "…"`, not `node …`, and the glob above expects one path segment between
+`claude-rider/` and `/scripts`, where a local directory install has none and a cache install has
+two. Settling which line the harness honours needs an interactive `--permission-mode default`
+session; see *Verified on*.
+
 For by-hand use outside a session the executor is also `npm i -g`-able (`package.json` declares a
 `rider` bin); the plugin is the primary route.
 
@@ -73,6 +80,11 @@ Two names are reserved and never declared as phases or as edge labels:
 - **`resume`** — an implicit reflexive edge on every session phase, taken when a session was cut
   short by the environment (a rate limit, a killed process). It re-enters the *same* session with a
   nudge; it never restarts the phase.
+
+The rate-limit message shapes the classifier recognises are Claude Code 2.1.260's known strings;
+none of them has been observed live in this project (no 429 was hit while it was built). A shape it
+does not recognise reads `done` with "no STATUS line in the final message" — the judge relays that,
+and you resume the session by hand with `rider resume`.
 
 The graph is validated when the rider loads, and an invalid rider is refused with the reason before
 anything runs: every edge target is a declared phase or `operator`; `start` names a declared session
@@ -163,7 +175,7 @@ rider — drive riders/<name>/RIDER.md one phase at a time (run from the project
   rider reset                         forget the active run (its record stays under .rider/<name>/runs/)
   rider watch                         the detached watcher itself (spawned by start/next/resume/check)
 
-  --rider <name>   when the project has several riders      --json   machine-readable output
+  --rider <directory name>   when the project has several riders   --json   machine-readable output
   --dry-run        start/next/resume print the harness command and run nothing
   --max-minutes N  await's deadline in minutes (default 60)  --binding <path>  another harness module (or RIDER_BINDING)
 exit: 0 ok · 2 refused or usage · 3 await timed out
@@ -236,8 +248,14 @@ which criterion:
 Cost is charged per stretch: a resumed session's record carries only what its own stretch added.
 
 **Known limit:** `check` is not locked. A hand-run `rider check` and the watcher can classify the
-same stop at the same moment, and both write `run.json`. The content is the same and the last
-writer wins; the design accepts this.
+same stop at the same moment, and both write `run.json` — each from the copy it loaded, so the two
+writes are not always the same content. The last writer wins, and it can drop a counter the other
+had just advanced (`goneSightings`, `signedOffTurns`) by one sighting. That costs at most one extra
+poll before the counter is earned again; the design accepts this.
+
+**Known limit:** the launch is not atomic. If the executor dies between the `claude` CLI creating
+the session and `run.json` being written, that session is orphaned — it keeps running, and paying,
+with nothing tracking it. It is listed by `claude agents`; remove it by hand (`claude stop <id>`).
 
 ## Tests
 
@@ -255,10 +273,10 @@ release (§ numbers refer to the design notes, which are not shipped in this rep
 | Claim | Where | Verified | Result |
 |---|---|---|---|
 | `/rider` resolves (or only `/rider:rider`) | §3.4 | 2026-09-04, Claude Code 2.1.260 | **PASS for `/rider:rider`** — a session launched with that prompt expanded the skill (the turn carries `<command-name>/rider:rider</command-name>` followed by the SKILL.md body) and went on to run the executor. Bare `/rider` was **not tried**, so it stays unverified; `plugin details rider` lists the component as `rider` |
-| `${CLAUDE_PLUGIN_ROOT}` expands in the skill's Bash calls; which allowlist line prevents prompts | §3.4 | 2026-09-04, Claude Code 2.1.260 | **Expansion PASS** — it reached the skill body already substituted, as an absolute forward-slash path, and every `node "…/scripts/rider.mjs"` call ran. It is the plugin's *install root*: installed from a local `directory` marketplace that is the checkout itself, not the `~/.claude/plugins/cache/` copy. **The allowlist question is not discriminated** — under `--permission-mode auto` no prompt appeared, so neither line was exercised; both are kept above |
+| `${CLAUDE_PLUGIN_ROOT}` expands in the skill's Bash calls; which allowlist line prevents prompts | §3.4 | 2026-09-04, Claude Code 2.1.260 | **Expansion PASS** — it reached the skill body already substituted, as an absolute forward-slash path, and every `node "…/scripts/rider.mjs"` call ran. It is the plugin's *install root*: installed from a local `directory` marketplace that is the checkout itself, not the `~/.claude/plugins/cache/` copy. **The allowlist question is not discriminated** — under `--permission-mode auto` no prompt appeared, so neither line was exercised; both are kept above. The GitHub-source install route was not exercised. |
 | The detached watcher outlives its spawning process | §4.6 | `npm run smoke` (the two watcher assertions) | **PASS as measured** — it outlived `rider start`, a `spawnSync`'d process that had already exited, and appended the phase's `done` event. The same shape was seen again in the live judge session. It was **not** measured against a judge session's own exit |
 | A backgrounded `rider await` wakes the judge | §3.3 | a live judge session (below) | **PASS** — `rider await` was armed with the Bash tool's `run_in_background`, exited 0 carrying the watcher's event line at `08:50:33.380Z`, the completion notification reached the judge at `08:50:35.313Z` (**1.9 s**), and it then ran `status`, `check` and `next "done" --because …` with nobody typing |
-| Git Bash runs the worked example's POSIX commands on Windows | §7 | `test/shell.test.mjs` | **PASS offline** (77/77 on this machine). Offline evidence only: the smoke rider declares no `intake` or `evidence` and never enters its human phase, so no live run has put a POSIX line through the resolved shell |
+| Git Bash runs the worked example's POSIX commands on Windows | §7 | `test/shell.test.mjs` | **PASS offline** — `test/shell.test.mjs` resolves Git Bash to `C:/Program Files/Git/bin/bash.exe` on this machine and runs POSIX lines of the worked example's shape (`test`, `$(…)` substitution, redirection, non-zero exit); the example's own `intake`/`evidence` lines are not run. Offline evidence only: the smoke rider declares no `intake` or `evidence` and never enters its human phase. |
 
 Three things the runs behind this table showed that are worth knowing:
 
