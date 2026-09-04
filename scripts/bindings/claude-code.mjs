@@ -112,9 +112,13 @@ function nextWallClock(now, zone, hour, minute) {
   return null;
 }
 
-/** "resets 1:40am (America/Toronto)" → absolute instant in the account's zone; null when unparseable. */
+/** "resets 1:40am (America/Toronto)", "will reset at 3pm", or the epoch form "…limit reached|1757000000"
+ *  → an absolute instant (in the account's zone for the wall-clock forms); null when unparseable. */
 export function parseResetTime(text, now = new Date()) {
-  const m = /resets?\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s*(?:\(([^)]+)\))?/i.exec(text ?? "");
+  // Claude Code prints the reset as a unix epoch after a pipe on some messages: it needs no zone.
+  const epoch = /\|(\d{10})\b/.exec(text ?? "");
+  if (epoch) return new Date(Number(epoch[1]) * 1000);
+  const m = /resets?\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s*(?:\(([^)]+)\))?/i.exec(text ?? "");
   if (!m) return null;
   let hour = Number(m[1]);
   const minute = Number(m[2] ?? 0);
@@ -128,7 +132,8 @@ export function parseResetTime(text, now = new Date()) {
 /** Why a session produced no STATUS line: a rate limit (a wait), an API error, or nothing. */
 export function classifyNoMarker(json, text, now = new Date()) {
   const status = json?.api_error_status ?? null;
-  const limited = status === 429 || /(hit|reached) your (session|usage|weekly|account) limit|\brate[ -]?limits?\b|\btoo many requests\b/i.test(text ?? "");
+  // The shapes 2.1.260 actually prints; the \b anchors keep prose ("rate-limiting middleware") out.
+  const limited = status === 429 || /(hit|reached) your(?: \w+)? limit|usage limit reached|limit will reset|\brate[ -_]?limits?\b|\btoo many requests\b|\bAPI Error:?\s*429\b/i.test(text ?? "");
   if (limited) return { kind: "rate-limited", status, resetAt: parseResetTime(text, now) };
   const apiErr = /\bAPI Error:?\s*(5\d\d)\b/i.exec(text ?? "");
   if (json?.terminal_reason === "api_error" || (status !== null && status >= 500) || apiErr) {

@@ -120,6 +120,15 @@ test("no STATUS line: a rate limit (with its reset) vs an API error", () => {
   b.p.cleanup();
 });
 
+test("a STATUS line wins: the rate-limit classifier is consulted only when there is no hint", () => {
+  const { ctx, p } = setup([{ statuses: ["done"], read: { lastText: "Documented the rate limits we hit.\nSTATUS: planned\n<promise>X</promise>" } }]);
+  const r = check(ctx);
+  assert.equal(r.state, "done");
+  assert.equal(r.statusHint, "STATUS: planned");
+  assert.equal(r.rateLimit, null);
+  p.cleanup();
+});
+
 test("human turns after the launch prompt mean intervened", () => {
   const { ctx, p } = setup([{ statuses: ["done"], read: { lastText: GREEN, userTurns: 2 } }]);
   const r = check(ctx);

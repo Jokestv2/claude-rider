@@ -84,6 +84,24 @@ test("rate-limit and API-error classification", () => {
   assert.equal(classifyNoMarker(null, "").kind, "no-marker");
 });
 
+test("the real Claude Code limit shapes classify as rate-limited", () => {
+  const now = new Date("2026-08-31T12:00:00Z");
+  const hit = classifyNoMarker(null, "You've hit your limit · resets 1:40am (America/Toronto)", now);
+  assert.equal(hit.kind, "rate-limited");
+  assert.equal(new Intl.DateTimeFormat("en-US", { timeZone: "America/Toronto", hour12: false, hour: "2-digit", minute: "2-digit" }).format(hit.resetAt), "01:40");
+  const epoch = classifyNoMarker(null, "Claude AI usage limit reached|1757000000", now);
+  assert.equal(epoch.kind, "rate-limited");
+  assert.equal(epoch.resetAt.toISOString(), "2025-09-04T15:33:20.000Z");
+  const api = classifyNoMarker(null, "API Error: 429 {\"type\":\"error\"}", now);
+  assert.deepEqual([api.kind, api.resetAt], ["rate-limited", null]);
+  const later = classifyNoMarker(null, "Your limit will reset at 3pm (UTC)", now);
+  assert.equal(later.kind, "rate-limited");
+  assert.equal(later.resetAt.toISOString(), "2026-08-31T15:00:00.000Z");
+  // prose about limits is not a limit
+  assert.equal(classifyNoMarker(null, "The rate-limiting middleware is off; these are the limits of the approach.", now).kind, "no-marker");
+  assert.equal(parseResetTime("the quota resets, eventually", now), null);
+});
+
 test("reset time is resolved in the account's zone", () => {
   const noonUTC = new Date("2026-08-31T12:00:00Z");
   const inToronto = (d, o) => new Intl.DateTimeFormat("en-US", { timeZone: "America/Toronto", hour12: false, ...o }).format(d);
