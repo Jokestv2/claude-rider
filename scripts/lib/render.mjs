@@ -21,11 +21,14 @@ export function render(verb, r) {
   return renderCheck(r);
 }
 
+// `none` is not only "nothing here": reset and check both return it carrying a message of their own
+// (what was reset, or why the run has no session), and dropping that leaves the operator with a lie.
 function renderNone(r) {
-  const L = ["no active run"];
+  const L = [r.message ?? "no active run"];
   if (r.ended) L.push(`run ${r.ended.runId} ended: ${r.ended.reason}`);
   const last = r.lastRun;
   if (last && !r.ended) L.push(`last run ${last.runId} ended at ${last.endedBy} (phase ${last.phase}): ${last.reason ?? ""}`.trimEnd());
+  if (r.error) L.push(r.error);
   return L.join("\n");
 }
 

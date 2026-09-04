@@ -25,6 +25,14 @@ test("the check block has the §4.4 shape", () => {
   assert.match(out, /── legal labels: code green → close · blocked → operator · resume · operator$/);
 });
 
+test("state none keeps the verb's own message and error", () => {
+  assert.equal(render("reset", { ok: true, state: "none", message: "no active run; nothing to reset" }), "no active run; nothing to reset");
+  assert.equal(render("reset", { ok: true, state: "none", message: "run 3f2a forgotten; its record is under runs/" }), "run 3f2a forgotten; its record is under runs/");
+  assert.match(render("reset", { ok: true, state: "none", message: "run 3f2a forgotten; its record is under runs/", lastRun: { runId: "3f2a", phase: "plan", endedBy: "reset", reason: "rider reset" } }), /^run 3f2a forgotten; its record is under runs\/\nlast run 3f2a ended at reset \(phase plan\): rider reset$/);
+  assert.equal(render("check", { state: "none", error: "run 3f2a has no session for phase plan" }), "no active run\nrun 3f2a has no session for phase plan");
+  assert.equal(render("check", { state: "none" }), "no active run");
+});
+
 test("running, none, human and refusal render short", () => {
   assert.match(render("check", { ...done, state: "running", outcome: "running", evidence: [] }), /^rider lemmaria\/3f2a[^\n]*\nstate: running/);
   assert.equal(render("check", { ...done, state: "running", outcome: "running", evidence: [] }).includes("legal labels"), false);
