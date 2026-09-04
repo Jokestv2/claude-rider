@@ -73,7 +73,8 @@ export function next(ctx, label, { because = null, dryRun = false } = {}) {
   const sess = currentSession(run);
   if (!sess || sess.outcome === "running" || sess.outcome === "waiting") return refuse(`${run.phase} is still ${sess?.outcome ?? "unlaunched"} — rider check first`);
   if (label === "resume") return resume(ctx, { reason: because ?? "judge", dryRun });
-  const to = label === "operator" ? "operator" : def.edges[label];
+  // Only the declared labels: a label like "toString" must not read through Object.prototype on def.edges.
+  const to = legalLabels(ctx.rider, run.phase).find((l) => l.label === label)?.to ?? null;
   if (!to) return refuse(`"${label}" is not an edge of ${run.phase} — legal: ${labelList(ctx, run.phase)}`);
   if (dryRun) return to === "operator" ? { ok: true, state: "dry-run", to: "operator" } : enterPhase(ctx, run, to, { dryRun: true });
   run.transitions.push({ at: ctx.now().toISOString(), from: run.phase, label, to, because });

@@ -106,6 +106,23 @@ test("resume re-enters the same session: bare when listed, with options when not
   p.cleanup();
 });
 
+test("dry runs change nothing: next previews the launch, resume previews the argv", () => {
+  const p = tmpProject();
+  const binding = new FakeBinding({ script: [{ statuses: ["done"], read: { lastText: GREEN } }] });
+  const ctx = makeCtx({ root: p.root, binding });
+  start(ctx);
+  assert.equal(check(ctx).state, "done");
+  const d = next(ctx, "planned", { dryRun: true });
+  assert.deepEqual([d.state, d.phase, Array.isArray(d.argv)], ["dry-run", "build", true]);
+  const rd = resume(ctx, { dryRun: true });
+  assert.deepEqual([rd.state, rd.phase, Array.isArray(rd.argv)], ["dry-run", "plan", true]);
+  const run = ctx.loadRun();
+  assert.deepEqual([run.phase, run.transitions.length, run.sessions.length], ["plan", 0, 1]);
+  assert.deepEqual(binding.calls.map((c) => c.call), ["launch", "stop"]);
+  assert.match(next(ctx, "toString", { dryRun: true }).error, /is not an edge of plan/);
+  p.cleanup();
+});
+
 test("a gone session is resumed with its options again (unlisted)", () => {
   const p = tmpProject();
   const binding = new FakeBinding({ script: [{ statuses: ["gone"] }, { statuses: ["running"] }] });
