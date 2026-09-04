@@ -254,6 +254,12 @@ writes are not always the same content. The last writer wins, and it can drop a 
 had just advanced (`goneSightings`, `signedOffTurns`) by one sighting. That costs at most one extra
 poll before the counter is earned again; the design accepts this.
 
+**Known limit:** the rate-limit wait lives in the watcher process. The resume at the reset is
+guaranteed only while that process lives; a watcher killed mid-wait resumes nothing by itself. The
+run is not stranded — the next `rider check`, or the judge's next `rider await` poll, respawns a
+watcher, which re-reads the stored `rateLimit.resetAt` and re-enters the wait — but the session
+stays rate-limited until one of those happens.
+
 **Known limit:** the launch is not atomic. If the executor dies between the `claude` CLI creating
 the session and `run.json` being written, that session is orphaned — it keeps running, and paying,
 with nothing tracking it. It is listed by `claude agents`; remove it by hand (`claude stop <id>`).
