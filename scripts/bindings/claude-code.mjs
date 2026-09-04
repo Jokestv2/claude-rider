@@ -187,6 +187,7 @@ export function createBinding({ claudePath = null, advisor = null, permissionMod
     read: (ids) => { const p = findTranscript(projectsDir, ids.sessionId); return { ...readTranscript(p ? readFileSync(p, "utf8") : ""), transcript: p }; },
     stop: (ids) => { claude(["stop", ids.shortId ?? ids.sessionId]); },
     attachHint: (ids) => `claude attach ${ids.shortId ?? ids.sessionId}   (or ← for agents)`,
+    stopHint: (ids) => `claude stop ${ids.shortId ?? ids.sessionId}`,
     dryRun: { claudePath: exe, launchArgv, resumeArgv },
     heuristics: { classifyNoMarker, parseResetTime },
   };

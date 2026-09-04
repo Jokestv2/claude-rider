@@ -48,6 +48,7 @@ export class FakeBinding {
   read(ids) { this.#load(); const x = this.#find(ids); return x ? { ...x.read, transcript: `/fake/${x.sessionId}.jsonl` } : { ...EMPTY_READ }; }
   stop(ids) { this.#load(); this.s.calls.push({ call: "stop", shortId: ids.shortId }); const x = this.#find(ids); if (x) { x.read.costEntries += 1; x.pid = null; x.statuses = ["done"]; } this.#save(); }
   attachHint(ids) { return `claude attach ${ids.shortId ?? ids.sessionId}`; }
+  stopHint(ids) { return `claude stop ${ids.shortId ?? ids.sessionId}`; }
 }
 
 /** Module form for the CLI: `RIDER_BINDING=<this file> RIDER_FAKE_STATE=<json>`; seed the json with {"scripts":[…]}. */

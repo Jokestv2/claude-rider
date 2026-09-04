@@ -150,6 +150,11 @@ export function reset(ctx) {
   const run = ctx.loadRun();
   ctx.killWatcher();
   if (!run) return { ok: true, state: "none", message: "no active run; nothing to reset" };
-  ctx.endRun(run, { endedBy: "reset", reason: "rider reset" });
-  return { ok: true, state: "none", message: `run ${run.runId} forgotten; its record is under runs/` };
+  // Forgetting a live phase leaves a paid session running with nothing tracking it: name it, and say
+  // how to stop it. The harness-shaped stop line comes from the binding (§5), never from here.
+  const sess = currentSession(run);
+  const live = sess && (sess.outcome === "running" || sess.outcome === "waiting");
+  const paid = live ? ` — session ${sess.shortId ?? sess.id} is still ${sess.outcome} and still paying: ${ctx.binding.stopHint({ shortId: sess.shortId, sessionId: sess.id })}` : "";
+  ctx.endRun(run, { endedBy: "reset", reason: `rider reset${paid}` });
+  return { ok: true, state: "none", message: `run ${run.runId} forgotten; its record is under runs/${paid}` };
 }

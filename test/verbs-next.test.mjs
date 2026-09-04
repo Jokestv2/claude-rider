@@ -64,6 +64,18 @@ test("entering a human phase prints show; status says human; reset ends the run 
   p.cleanup();
 });
 
+test("reset on a live phase names the session it is forgetting and how to stop it", () => {
+  const p = tmpProject();
+  const ctx = makeCtx({ root: p.root, binding: new FakeBinding({ script: [{ statuses: ["running"] }] }) });
+  const s = start(ctx);
+  const r = reset(ctx);
+  assert.equal(r.state, "none");
+  assert.match(r.message, new RegExp(`session ${s.session.shortId} is still running`));
+  assert.match(r.message, new RegExp(`claude stop ${s.session.shortId}`));
+  assert.match(ctx.lastEndedRun().reason, new RegExp(`claude stop ${s.session.shortId}`));
+  p.cleanup();
+});
+
 test("the visit cap ends the run at operator on a revisit edge", () => {
   const md = TEST_RIDER_MD.replace("edges: { planned: build, blocked: operator }", "edges: { retry: plan, planned: build }").replace("intake:", "limits:\n  visits: 2\nintake:");
   const p = tmpProject({ riderMd: md });
