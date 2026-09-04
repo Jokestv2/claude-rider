@@ -98,6 +98,46 @@ test("gone is an event; the watch exits quietly when there is nothing to watch",
   idle.p.cleanup();
 });
 
+test("the watch survives a transient check failure and carries on", () => {
+  const t = setup([{ statuses: ["running", "done"], read: { lastText: "STATUS: planned" } }]);
+  start(t.ctx);
+  const orig = t.binding.status.bind(t.binding);
+  let calls = 0;
+  t.binding.status = (ids) => { if (++calls === 1) throw new Error("registry read failed"); return orig(ids); };
+  const r = watchLoop(t.ctx, opts(t));
+  assert.equal(r.state, "done");
+  assert.ok(t.logs.some((m) => /check failed \(1\/5\): registry read failed/.test(m)));
+  assert.equal(t.ctx.readEvents().length, 1);
+  t.p.cleanup();
+});
+
+test("five consecutive check failures: the watch emits an event and stops", () => {
+  const t = setup([{ statuses: ["running"] }]);
+  start(t.ctx);
+  t.binding.status = () => { throw new Error("registry unreadable"); };
+  const r = watchLoop(t.ctx, opts(t));
+  assert.equal(r.ok, false);
+  const ev = t.ctx.readEvents();
+  assert.equal(ev.length, 1);
+  assert.match(ev[0], / running lemmaria\/[0-9a-f]{4} plan s1 watcher giving up: registry unreadable$/);
+  t.p.cleanup();
+});
+
+test("await: a dead watcher under a live phase is respawned", () => {
+  const p = tmpProject();
+  const clock = new FakeClock();
+  let spawns = 0;
+  const ctx = makeCtx({ root: p.root, binding: new FakeBinding({ script: [{ statuses: ["running"] }] }), clock, spawnWatcher: () => { spawns++; return true; }, watcherAlive: () => null });
+  start(ctx);
+  assert.equal(spawns, 1);
+  const before = ctx.loadRun().sessions[0].watcherSpawns;
+  const r = awaitEvent(ctx, { maxMinutes: 1, pollMs: 10_000 });
+  assert.equal(r.state, "timeout");
+  assert.ok(spawns > 1, `ensureWatcher was called ${spawns} times`);
+  assert.ok(ctx.loadRun().sessions[0].watcherSpawns > before);
+  p.cleanup();
+});
+
 test("await: returns on a new event, at once when the phase is past running, or times out", () => {
   const t = setup([{ statuses: ["running"] }]);
   start(t.ctx);

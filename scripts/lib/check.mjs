@@ -9,6 +9,15 @@ const DONE_GRACE_MS = 10 * 60_000;
 const EVIDENCE_CAP = 2048;
 const STOPPED = new Set(["done", "gone", "rate-limited"]);
 
+/** One watcher per live session: respawn a dead one and count the spawn on the session record.
+ *  Idempotent — `ensureWatcher` returns false while the pid file names a living process. */
+export function respawnWatcher(ctx, run, sess) {
+  if (ctx.watcherAlive() || !ctx.ensureWatcher()) return false;
+  sess.watcherSpawns = (sess.watcherSpawns ?? 0) + 1;
+  ctx.saveRun(run);
+  return true;
+}
+
 /** One classification pass over the active run (§4.4). Idempotent; never blocks longer than ~20 s. */
 export function check(ctx) {
   const run = ctx.loadRun();
@@ -55,7 +64,7 @@ export function check(ctx) {
     sess.intervened = sess.humanTurns > 0;
     if (kind === "waiting") sess.questionRelayed = true;
     ctx.saveRun(run);
-    if (!ctx.watcherAlive() && ctx.ensureWatcher()) { sess.watcherSpawns = (sess.watcherSpawns ?? 0) + 1; ctx.saveRun(run); }
+    respawnWatcher(ctx, run, sess);
     return result(ctx, run, sess, kind, h.lastText ?? "", note);
   }
 
