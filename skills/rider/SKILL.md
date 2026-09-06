@@ -36,7 +36,10 @@ between phases**. The graph is enforced by the executor: you can only pick a lab
 3. **Arm the watch:** run `rider await` with the Bash tool's `run_in_background: true`. It exits 0
    with the event line when the watcher reports a judge-worthy state, or exit 3 after 60 minutes as
    a heartbeat. Either completion is your next turn: **start again at step 1.** A duplicate await is
-   harmless.
+   harmless. A **killed** `await` is routine, not a failure: the harness reaps background bash
+   tasks under memory pressure while the rider's own watcher survives untouched. Re-arm it and
+   stop — do not narrate the kill, and do not re-derive the run's state from it; `rider status`
+   is the truth.
 
 ## Reading a finished phase
 
@@ -48,8 +51,12 @@ between phases**. The graph is enforced by the executor: you can only pick a lab
 - **`gone`** is a killed session: pick `resume` (the executor re-enters the same session).
 - **`rate-limited`** means the watcher gave up (three resumes, or a reset past its cap). Tell the
   operator the reset time in the block and stop; run `rider resume` when they say so.
-- **`intervened`** means the operator typed into the session after the launch. Do not judge its
-  final text; ask the operator what they did and what they want, then act on their answer.
+- **`intervened`** means a user-role turn beyond the launch reached the session. `check` prints them
+  under `── human turns ──`. **Read them before doing anything else.** If every one is plainly not a
+  person — no origin, an autocompact summary, an injected notice — judge the phase on its evidence as
+  usual and say in `--because` which turn you discounted and why. If any reads as real typed input,
+  do **not** judge its final text: relay the turns verbatim, ask the operator what they did and what
+  they want, and act on their answer.
 - **`done` with no status hint** (an API error, or a session that just stopped): the final message
   and the evidence decide. If the work is plainly incomplete and the transcript is intact, `resume`
   is usually right; if you cannot tell, `operator` with the reason.

@@ -30,8 +30,20 @@ so nothing prompted. Two shapes to be aware of if it does prompt — the judge's
 two. Settling which line the harness honours needs an interactive `--permission-mode default`
 session; see *Verified on*.
 
-For by-hand use outside a session the executor is also `npm i -g`-able (`package.json` declares a
-`rider` bin); the plugin is the primary route.
+### The operator's CLI
+
+The plugin gives Claude the judge skill. It does **not** put `rider` on your PATH — inside the skill
+the executor is spelled `node "${CLAUDE_PLUGIN_ROOT}/scripts/rider.mjs"`, which only resolves there.
+For the verbs you run yourself — `rider status` to look in on a run without spending a judge turn,
+`rider resume` after a rate limit, `rider start <phase>` to enter a milestone that is already planned:
+
+```bash
+npm i -g Jokestv2/claude-rider
+```
+
+This is independent of the plugin cache, so it survives plugin upgrades. Keep the two in step when
+you upgrade one: they read the same `run.json`, and only the newer of them understands
+`baseBranch`/`workBranch` (an older copy falls back to the legacy `branch` field and still works).
 
 ## Adopt it in a project
 
