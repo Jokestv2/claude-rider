@@ -63,7 +63,7 @@ test("synthetic entries never become the final reply but still reach the signal"
   assert.match(h.signal, /API Error: 529/);
   assert.equal(h.turns, 2);
   assert.equal(readTranscript(SYNTH).lastText, null);
-  assert.deepEqual(readTranscript(""), { lastText: null, lastAt: null, cost: null, costEntries: 0, question: null, turns: 0, userTurns: 0, signal: "", tail: [] });
+  assert.deepEqual(readTranscript(""), { lastText: null, lastAt: null, cost: null, costEntries: 0, question: null, turns: 0, userTurns: 0, userTurnDetails: [], signal: "", tail: [] });
 });
 
 test("lastAt is the entry timestamp of the last real assistant text", () => {
@@ -107,6 +107,35 @@ test("an autocompact summary is not a human turn", () => {
   // An origin-less string turn that is NOT a compact summary still counts (the fallback survives).
   const legacy = JSON.stringify({ type: "user", message: { role: "user", content: "typed on an older CLI" } });
   assert.equal(readTranscript([U("Prompt A…"), legacy].join("\n")).userTurns, 2);
+});
+
+test("counted user turns are retained, capped and labelled", () => {
+  const COMPACT = JSON.stringify({
+    type: "user",
+    isCompactSummary: true,
+    message: { role: "user", content: "compacted" },
+  });
+  const long = "x".repeat(900);
+  const h = readTranscript([U("Prompt A…"), COMPACT, U(long), A("done")].join("\n"));
+
+  assert.equal(h.userTurnDetails.length, 2, "the compact summary is neither counted nor listed");
+  assert.equal(h.userTurnDetails[0].text, "Prompt A…");
+  assert.equal(h.userTurnDetails[0].origin, "human");
+  assert.equal(h.userTurnDetails[1].bytes, 900);
+  assert.equal(h.userTurnDetails[1].text.length, 400, "text is truncated, bytes records the true size");
+  assert.equal(h.userTurnDetails[1].truncated, true);
+  assert.equal(h.userTurnDetails[0].truncated, false);
+
+  // `truncated` is recorded, not derived: a short multibyte turn has bytes > text.length and is NOT cut.
+  const cjk = readTranscript(U("评审意见")).userTurnDetails[0];
+  assert.equal(cjk.truncated, false);
+  assert.ok(cjk.bytes > cjk.text.length, "12 UTF-8 bytes, 4 UTF-16 units");
+
+  const legacy = JSON.stringify({ type: "user", message: { role: "user", content: "typed on an older CLI" } });
+  assert.equal(readTranscript(legacy).userTurnDetails[0].origin, "no origin, string content");
+
+  const many = Array.from({ length: 14 }, (_, i) => U(`turn ${i}`));
+  assert.equal(readTranscript(many.join("\n")).userTurnDetails.length, 10, "at most 10 entries are kept");
 });
 
 test("rate-limit and API-error classification", () => {

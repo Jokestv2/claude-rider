@@ -1,7 +1,7 @@
 // test/render.test.mjs
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { render } from "../scripts/lib/render.mjs";
+import { render, renderCheck } from "../scripts/lib/render.mjs";
 
 const done = {
   state: "done", outcome: "done", note: null, rider: "lemmaria", runId: "3f2a", phase: "build", visit: 1,
@@ -23,6 +23,32 @@ test("the check block has the §4.4 shape", () => {
   assert.match(out, /── final message ─+ \(capped at 8 KB; full text in \/x\/logs\/l\.json\)\n  All green\.\n  STATUS: code green/);
   assert.match(out, /── evidence ─+\n  \$ git status --porcelain\n  \$ git log --oneline main\.\.HEAD\n  a1b2c3d feat\(review\): x/);
   assert.match(out, /── legal labels: code green → close · blocked → operator · resume · operator$/);
+});
+
+test("the human-turns section prints the turns the count refers to", () => {
+  const base = {
+    rider: "lemmaria", runId: "c84c", phase: "build", visit: 1,
+    session: { shortId: "4c511ecd" }, attach: "claude attach 4c511ecd",
+    state: "intervened", statusHint: "STATUS: code green", resumes: 0,
+    cost: 52.43, turns: 433, elapsedMs: 4_860_000, finalText: "done.", labels: [],
+  };
+  const out = renderCheck({
+    ...base,
+    humanTurns: 1,
+    humanTurnDetails: [{ at: "2026-09-06T08:19:50.091Z", origin: "no origin, string content", bytes: 3200, text: "This session is being continued", truncated: true }],
+  });
+  assert.match(out, /── human turns ─+/);
+  assert.match(out, /1 turn after launch/);
+  assert.match(out, /\[2026-09-06T08:19:50\.091Z\] \(no origin, string content\)/);
+  assert.match(out, /This session is being continued/);
+  assert.match(out, /… 3200 bytes total, cut/);
+
+  // Plural, and no section at all when nothing beyond the launch reached the session.
+  assert.match(renderCheck({ ...base, humanTurns: 2, humanTurnDetails: [
+    { at: null, origin: "human", bytes: 4, text: "stop", truncated: false },
+    { at: null, origin: "human", bytes: 3, text: "why", truncated: false },
+  ] }), /2 turns after launch/);
+  assert.doesNotMatch(renderCheck({ ...base, humanTurns: 0, humanTurnDetails: [] }), /human turns ─/);
 });
 
 test("state none keeps the verb's own message and error", () => {

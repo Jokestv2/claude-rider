@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { check } from "../scripts/lib/check.mjs";
+import { renderCheck } from "../scripts/lib/render.mjs";
 import { start } from "../scripts/lib/verbs.mjs";
 import { FakeBinding } from "./fake-binding.mjs";
 import { FakeClock, makeCtx, tmpProject } from "./helpers.mjs";
@@ -168,6 +169,22 @@ test("human turns after the launch prompt mean intervened", () => {
   assert.equal(r.outcome, "done");
   assert.equal(r.humanTurns, 1);
   p.cleanup();
+});
+
+test("the launch prompt is never shown as an intervention", () => {
+  // Two counted turns, launch first: humanTurns is 1 and the list holds only the second.
+  const details = [
+    { at: "t0", origin: "human", bytes: 9, text: "Prompt A…", truncated: false },
+    { at: "t1", origin: "human", bytes: 4, text: "stop", truncated: false },
+  ];
+  const { ctx, p } = setup([{ statuses: ["done"], read: { lastText: GREEN, userTurns: 2, userTurnDetails: details } }]);
+  try {
+    const r = check(ctx);
+    assert.equal(r.humanTurns, 1);
+    assert.deepEqual(r.humanTurnDetails, [details[1]], "the launch prompt is dropped, not shown");
+    assert.match(renderCheck(r), /1 turn after launch/);
+    assert.doesNotMatch(renderCheck(r), /Prompt A/);
+  } finally { p.cleanup(); }
 });
 
 test("a live session the operator typed into is still running: intervened is a stop-time outcome", () => {

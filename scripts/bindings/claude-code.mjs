@@ -38,10 +38,13 @@ export function classifyRegistry(entry, alive) {
   return "running";
 }
 
+const TURN_TEXT_MAX = 400;
+const TURN_DETAILS_MAX = 10;
+
 export function readTranscript(text) {
   // lastAt anchors the rate-limit reset: a reset parsed against `now` when the judge was down for
   // hours reads as tomorrow, and the watcher would then sleep about a day for a limit already lifted.
-  const out = { lastText: null, lastAt: null, cost: null, costEntries: 0, question: null, turns: 0, userTurns: 0, signal: "", tail: [] };
+  const out = { lastText: null, lastAt: null, cost: null, costEntries: 0, question: null, turns: 0, userTurns: 0, userTurnDetails: [], signal: "", tail: [] };
   const signals = [];
   for (const line of String(text ?? "").split(/\r?\n/)) {
     if (!line.trim()) continue;
@@ -59,15 +62,30 @@ export function readTranscript(text) {
         }
         if (b.type === "tool_use" && b.name === "AskUserQuestion") out.question = b.input ?? null;
       }
-    // The origin-less fallback stays for transcripts that predate `origin`, but an injected entry is
-    // not a person: an autocompact summary arrives as user-role string content with no origin, and
-    // counting it made every phase long enough to compact read as `intervened`.
     } else if (d.type === "user") {
       if (content.some((b) => b.type === "tool_result")) out.question = null;
+      // The origin-less fallback stays for transcripts that predate `origin`, but an injected entry is
+      // not a person: an autocompact summary arrives as user-role string content with no origin, and
+      // counting it made every phase long enough to compact read as `intervened`.
       else if (
         d.origin?.kind === "human" ||
         (d.origin === undefined && typeof raw === "string" && !d.isCompactSummary && !d.isVisibleInTranscriptOnly)
-      ) out.userTurns++;
+      ) {
+        out.userTurns++;
+        // The judge is told a human turn happened; without the text it can only interrogate the
+        // operator about something already on disk. Capped so a pasted file cannot flood the block.
+        if (out.userTurnDetails.length < TURN_DETAILS_MAX) {
+          const text = content.filter((b) => b.type === "text").map((b) => b.text).join("\n");
+          const truncated = text.length > TURN_TEXT_MAX;
+          out.userTurnDetails.push({
+            at: typeof d.timestamp === "string" ? d.timestamp : null,
+            origin: d.origin?.kind ?? "no origin, string content",
+            bytes: Buffer.byteLength(text),
+            text: truncated ? text.slice(0, TURN_TEXT_MAX) : text,
+            truncated,
+          });
+        }
+      }
     } else if (d.type === "cost-state" && typeof d.totalCostUSD === "number") {
       out.cost = d.totalCostUSD;
       out.costEntries++;

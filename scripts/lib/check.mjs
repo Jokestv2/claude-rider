@@ -68,6 +68,7 @@ export function check(ctx) {
     sess.turns = h.turns;
     sess.question = h.question ?? null;
     sess.humanTurns = humanTurns(run, sess, h);
+    sess.humanTurnDetails = humanTurnDetails(run, sess, h);
     sess.intervened = sess.humanTurns > 0;
     if (kind === "waiting") sess.questionRelayed = true;
     ctx.saveRun(run);
@@ -101,6 +102,7 @@ export function check(ctx) {
   sess.question = h.question ?? null;
   sess.cost = h.cost == null ? null : Math.max(0, h.cost - chainCost(run.sessions, sess));
   sess.humanTurns = humanTurns(run, sess, h);
+  sess.humanTurnDetails = humanTurnDetails(run, sess, h);
   sess.intervened = sess.humanTurns > 0;
   sess.log = ctx.writeLog(`${sess.stoppedAt.replace(/[:.]/g, "-")}-${run.phase}-${sess.shortId ?? "id"}.json`, {
     runId: run.runId, phase: run.phase, ...ids, outcome: kind, entry: st.entry ?? null, resetAt,
@@ -112,6 +114,9 @@ export function check(ctx) {
 
 /** Human-origin user turns beyond the launch prompt and the nudges the rider itself typed. */
 function humanTurns(run, sess, h) { return Math.max(0, (h.userTurns ?? 0) - 1 - chainResumes(run.sessions, sess)); }
+
+/** The same turns `humanTurns` counts: the launch prompt and the rider's own resume nudges dropped. */
+function humanTurnDetails(run, sess, h) { return (h.userTurnDetails ?? []).slice(1 + chainResumes(run.sessions, sess)); }
 
 function checkHuman(ctx, run, def) {
   const r = sh(def.check, ctx.shellOpts());
@@ -143,7 +148,7 @@ function result(ctx, run, sess, outcome, finalText, note = null) {
     resumes: chainResumes(run.sessions, sess),
     lastResume: sess.resumedFrom ? { reason: sess.resumeReason, at: sess.at } : null,
     rateLimit: sess.rateLimit ?? null,
-    humanTurns: sess.humanTurns ?? 0, cost: sess.cost ?? null, turns: sess.turns ?? null, elapsedMs: sess.elapsedMs ?? null,
+    humanTurns: sess.humanTurns ?? 0, humanTurnDetails: sess.humanTurnDetails ?? [], cost: sess.cost ?? null, turns: sess.turns ?? null, elapsedMs: sess.elapsedMs ?? null,
     question: sess.question ?? null, finalText,
     evidence: state === "running" ? [] : runEvidence(ctx),
     labels: legalLabels(ctx.rider, run.phase), log: sess.log ?? null,
