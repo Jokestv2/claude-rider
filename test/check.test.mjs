@@ -267,3 +267,19 @@ test("workBranch is sticky and reaches the declared commands", () => {
     assert.equal(ctx.shellOpts(ctx.loadRun()).env.RIDER_BASE_BRANCH, "main");
   } finally { p.cleanup(); }
 });
+
+test("the stopped path records workBranch too: a phase already done at its first check", () => {
+  let head = "main";
+  const p = tmpProject();
+  // `read.turns` must be past the launch baseline (0), or `check` demotes this `done` back to `running`
+  // inside the done-grace window and the stopped path — the one under test — is never reached.
+  const binding = new FakeBinding({ script: [{ statuses: ["done"], read: { lastText: GREEN, turns: 5 } }] });
+  const ctx = makeCtx({ root: p.root, binding });
+  ctx.branch = () => head;
+  try {
+    start(ctx);
+    head = "feature/r4-grounding"; // the phase created the branch and finished before the first check
+    assert.equal(check(ctx).state, "done", "the first check must classify as stopped, not running");
+    assert.equal(ctx.loadRun().workBranch, "feature/r4-grounding");
+  } finally { p.cleanup(); }
+});

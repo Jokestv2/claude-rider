@@ -85,6 +85,32 @@ A **phase** is either a *session phase* or a *human phase*:
 
 `prompt`, `model` and `edges` are rejected on a human phase.
 
+### What a declared command is told
+
+Every shell command a rider declares — `intake`, `evidence`, and a human phase's `check` and `show` —
+runs from the project root with the environment it inherits plus five variables naming the run it is
+being asked about. A `check` line needs them: it is the gate of a phase that is entirely the operator's,
+and without them it can only hard-code a branch name or fall back to `HEAD`, which passes vacuously the
+moment the operator stands on the base branch.
+
+| Variable | Holds |
+|---|---|
+| `RIDER_NAME` | The rider's `name` |
+| `RIDER_RUN_ID` | The active run's four-character id |
+| `RIDER_PHASE` | The phase the command is being run for — for `intake`, the phase about to be entered |
+| `RIDER_BASE_BRANCH` | The branch the run started on |
+| `RIDER_WORK_BRANCH` | The branch the work went to — recorded at a session-phase `check` whenever the current branch differs from the base. It sticks: checking the base out again to merge does not clear it |
+
+Every one is always set, and is the **empty string** when it is not known: `RIDER_WORK_BRANCH` until the
+work lands on a branch of its own, and either branch variable when the project is not on a branch at all
+(no repository, or a detached `HEAD`). During `intake`, `RIDER_RUN_ID` and `RIDER_WORK_BRANCH` are empty
+because the run does not exist yet, and `RIDER_BASE_BRANCH` is the branch about to be recorded. Quote
+them: a command that tests `"$RIDER_WORK_BRANCH"` unquoted while it is empty is a different command.
+
+```yaml
+    check: git merge-base --is-ancestor "$RIDER_WORK_BRANCH" main
+```
+
 Two names are reserved and never declared as phases or as edge labels:
 
 - **`operator`** — a built-in terminal phase. Any edge may target it. Reaching it stops the run for

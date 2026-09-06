@@ -2,7 +2,7 @@
 import { readFileSync } from "node:fs";
 import { legalLabels } from "./rider-md.mjs";
 import { sh } from "./shell.mjs";
-import { currentSession, newRun, totalCost } from "./state.mjs";
+import { baseOf, currentSession, newRun, totalCost } from "./state.mjs";
 
 export function refuse(error) { return { ok: false, error }; }
 
@@ -130,7 +130,7 @@ export function status(ctx) {
   const sess = currentSession(run);
   const state = def.kind === "human" ? "human" : !sess ? "none" : sess.outcome === "running" ? "running" : sess.outcome === "waiting" ? "waiting" : "finished";
   return {
-    ok: true, state, rider: run.rider, runId: run.runId, phase: run.phase, visits: run.visits, branch: run.branch, baseBranch: run.baseBranch ?? run.branch, workBranch: run.workBranch ?? null, startedAt: run.startedAt, watcher, lastEvent,
+    ok: true, state, rider: run.rider, runId: run.runId, phase: run.phase, visits: run.visits, branch: run.branch, baseBranch: baseOf(run), workBranch: run.workBranch ?? null, startedAt: run.startedAt, watcher, lastEvent,
     totalCost: totalCost(run),
     sessions: run.sessions.map((s) => ({ phase: s.phase, model: s.model, shortId: s.shortId, id: s.id, outcome: s.outcome, cost: s.cost ?? null, turns: s.turns ?? null, at: s.at, resumedFrom: s.resumedFrom ?? null })),
     transitions: run.transitions, notes: run.notes,

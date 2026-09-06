@@ -24,16 +24,21 @@ export function loadLocal(paths) {
 export function newRun({ rider, phase, branch, now }) {
   // `branch` is a legacy mirror of `baseBranch`: the npm-installed CLI and the plugin copy read the
   // same run.json and may differ in version, so a run written by the newer one must still render in
-  // the older. Read the pair everywhere as `run.baseBranch ?? run.branch`.
+  // the older. Never read the pair by hand: `baseOf(run)` below is its one definition.
   return { rider, runId: randomBytes(2).toString("hex"), startedAt: now.toISOString(), baseBranch: branch ?? null, branch: branch ?? null, phase, visits: {}, transitions: [], sessions: [], notes: [] };
 }
+/** The branch the run started on, and the ONE definition of the legacy fallback: `baseBranch` on a record
+ *  written since the branch pair landed, `branch` on one written before it. Null when the record carries
+ *  neither, and for no record at all — each caller adds its own shape for "unknown". It also reads a
+ *  `status` result, which carries the same two keys. */
+export function baseOf(run) { return run?.baseBranch ?? run?.branch ?? null; }
 /** What a RIDER.md-declared command (intake, check, show, evidence) is told about the run. */
 export function riderEnv(rider, run) {
   return {
     RIDER_NAME: rider?.name ?? "",
     RIDER_RUN_ID: run?.runId ?? "",
     RIDER_PHASE: run?.phase ?? "",
-    RIDER_BASE_BRANCH: run?.baseBranch ?? run?.branch ?? "",
+    RIDER_BASE_BRANCH: baseOf(run) ?? "",
     RIDER_WORK_BRANCH: run?.workBranch ?? "",
   };
 }

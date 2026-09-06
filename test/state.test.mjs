@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { appendEvent, chainCost, chainResumes, consecutiveRateLimitResumes, currentSession, endRun, ensureDirs, lastEndedRun, loadLocal, loadRun, newRun, readEvents, readJson, riderEnv, saveRun, statePaths, totalCost, writeLog } from "../scripts/lib/state.mjs";
+import { appendEvent, baseOf, chainCost, chainResumes, consecutiveRateLimitResumes, currentSession, endRun, ensureDirs, lastEndedRun, loadLocal, loadRun, newRun, readEvents, readJson, riderEnv, saveRun, statePaths, totalCost, writeLog } from "../scripts/lib/state.mjs";
 
 const now = new Date("2026-09-03T12:00:00Z");
 const R = (phase, id, { cost = null, resumedFrom = null, resumeReason = null, at = null } = {}) => ({ phase, id, cost, resumedFrom, resumeReason, at, outcome: "done" });
@@ -37,6 +37,13 @@ test("a run records base and work branch, and an old run still reads", () => {
   assert.equal(run.baseBranch, "main");
   assert.equal(run.branch, "main", "legacy mirror, so an older executor still renders");
   assert.equal(run.workBranch, undefined);
+
+  // `baseOf` is the one definition of the legacy fallback every other site reuses; it is null — never
+  // undefined — for a record carrying neither field, and for no record at all.
+  assert.equal(baseOf(run), "main");
+  assert.equal(baseOf({ branch: "main" }), "main", "a record written before the branch pair landed");
+  assert.equal(baseOf({}), null);
+  assert.equal(baseOf(null), null);
 
   assert.deepEqual(riderEnv({ name: "lemmaria" }, { runId: "c84c", phase: "build", baseBranch: "main", workBranch: "feature/r4-grounding" }), {
     RIDER_NAME: "lemmaria", RIDER_RUN_ID: "c84c", RIDER_PHASE: "build",

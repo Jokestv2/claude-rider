@@ -2,7 +2,7 @@
 import { signedOff, statusHint, waitingIsDone } from "./markers.mjs";
 import { legalLabels } from "./rider-md.mjs";
 import { sh } from "./shell.mjs";
-import { chainCost, chainResumes, currentSession, readJson, totalCost } from "./state.mjs";
+import { baseOf, chainCost, chainResumes, currentSession, readJson, totalCost } from "./state.mjs";
 
 const SETTLE_MS = 1000;
 const DONE_GRACE_MS = 10 * 60_000;
@@ -118,7 +118,7 @@ export function check(ctx) {
  *  merge — that is exactly when the terminal check needs the feature branch's name. */
 function noteWorkBranch(ctx, run) {
   const now = ctx.branch();
-  if (now && now !== (run.baseBranch ?? run.branch)) run.workBranch = now;
+  if (now && now !== baseOf(run)) run.workBranch = now;
 }
 
 /** Human-origin user turns beyond the launch prompt and the nudges the rider itself typed. */
@@ -141,7 +141,7 @@ function checkHuman(ctx, run, def) {
   return { state: "human", rider: run.rider, runId: run.runId, phase: run.phase, check: def.check, checkExit: r.status, checkOutput: r.output, show, notes: run.notes, totalCost: totalCost(run) };
 }
 
-export function runEvidence(ctx, run = null) {
+export function runEvidence(ctx, run) {
   return ctx.rider.evidence.map((cmd) => ({ cmd, ...sh(cmd, { ...ctx.shellOpts(run), capBytes: EVIDENCE_CAP, timeoutMs: 10_000 }) }));
 }
 

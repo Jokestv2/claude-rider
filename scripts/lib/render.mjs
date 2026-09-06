@@ -1,5 +1,6 @@
 // scripts/lib/render.mjs
 import { fmtCost, fmtDuration, formatFinal, formatQuestion } from "./markers.mjs";
+import { baseOf } from "./state.mjs";
 
 const RULE = (title) => `── ${title} ${"─".repeat(Math.max(4, 60 - title.length))}`;
 const labelText = (l) => (l.label === "resume" || l.label === "operator" ? l.label : `${l.label} → ${l.to}`);
@@ -48,7 +49,7 @@ function renderStatus(r) {
     L.push("next: rider start [phase]");
     return L.join("\n");
   }
-  const base = r.baseBranch ?? r.branch ?? "?";
+  const base = baseOf(r) ?? "?";
   const branchText = r.workBranch && r.workBranch !== base ? `base ${base} → work ${r.workBranch}` : `branch ${base}`;
   const L = [`rider ${r.rider}/${r.runId} · phase ${r.phase} (visit ${r.visits[r.phase] ?? 1}) · ${branchText} · started ${r.startedAt}`, `state: ${r.state}   watcher: ${r.watcher ? `alive (pid ${r.watcher})` : "none"}   last event: ${r.lastEvent ?? "none"}`];
   for (const s of r.sessions) L.push(`  ${s.phase.padEnd(8)} ${s.model.padEnd(7)} ${(s.shortId ?? "?").padEnd(9)} ${s.outcome.padEnd(13)} ${fmtCost(s.cost)}${s.turns != null ? `  ${s.turns} turns` : ""}${s.resumedFrom ? "  (resumed)" : ""}`);
