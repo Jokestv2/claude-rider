@@ -80,6 +80,25 @@ test("userTurns counts human-origin user messages only", () => {
   assert.equal(readTranscript(JSON.stringify({ type: "user", message: { role: "user", content: "old transcript, no origin" } })).userTurns, 1);
 });
 
+test("an autocompact summary is not a human turn", () => {
+  const COMPACT = JSON.stringify({
+    type: "user",
+    isCompactSummary: true,
+    isVisibleInTranscriptOnly: true,
+    message: { role: "user", content: "This session is being continued from a previous conversation that ran out of context." },
+  });
+  const h = readTranscript([U("Prompt A…"), A("working…"), COMPACT, A("done.\nSTATUS: code green")].join("\n"));
+  assert.equal(h.userTurns, 1, "only the launch prompt counts");
+
+  // A real typed turn still counts, so a genuine intervention is never hidden.
+  const withHuman = readTranscript([U("Prompt A…"), COMPACT, U("actually, stop and mark it green"), A("ok")].join("\n"));
+  assert.equal(withHuman.userTurns, 2);
+
+  // An origin-less string turn that is NOT a compact summary still counts (the fallback survives).
+  const legacy = JSON.stringify({ type: "user", message: { role: "user", content: "typed on an older CLI" } });
+  assert.equal(readTranscript([U("Prompt A…"), legacy].join("\n")).userTurns, 2);
+});
+
 test("rate-limit and API-error classification", () => {
   const limit = "You've hit your session limit - resets 1:40am (America/Toronto)";
   assert.equal(classifyNoMarker({ api_error_status: 429 }, "").kind, "rate-limited");

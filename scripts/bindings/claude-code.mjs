@@ -59,9 +59,15 @@ export function readTranscript(text) {
         }
         if (b.type === "tool_use" && b.name === "AskUserQuestion") out.question = b.input ?? null;
       }
+    // The origin-less fallback stays for transcripts that predate `origin`, but an injected entry is
+    // not a person: an autocompact summary arrives as user-role string content with no origin, and
+    // counting it made every phase long enough to compact read as `intervened`.
     } else if (d.type === "user") {
       if (content.some((b) => b.type === "tool_result")) out.question = null;
-      else if (d.origin?.kind === "human" || (d.origin === undefined && typeof raw === "string")) out.userTurns++;
+      else if (
+        d.origin?.kind === "human" ||
+        (d.origin === undefined && typeof raw === "string" && !d.isCompactSummary && !d.isVisibleInTranscriptOnly)
+      ) out.userTurns++;
     } else if (d.type === "cost-state" && typeof d.totalCostUSD === "number") {
       out.cost = d.totalCostUSD;
       out.costEntries++;
