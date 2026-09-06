@@ -63,6 +63,18 @@ test("a capped list of human turns says so; an uncapped one adds no line", () =>
   assert.match(renderCheck({ ...base, humanTurns: 1, humanTurnDetails: [] }), /showing the first 0 of 1/);
 });
 
+test("more turns shown than counted is surfaced, not hidden", () => {
+  // Reachable only when an entry that should have been marked `nudge` was not — in which case one of
+  // the blocks below is the rider's own nudge dressed as an intervention. The arithmetic count is the
+  // only thing that can expose that, so it is printed rather than reconciled away: nothing at this
+  // point identifies which entry to drop.
+  const turn = (i) => ({ at: null, origin: "human", bytes: 6, text: `turn ${i}`, truncated: false });
+  const out = renderCheck({ ...base, humanTurns: 1, humanTurnDetails: [turn(0), turn(1)] });
+  assert.match(out, /1 turn after launch\n  2 shown, 1 counted\n/);
+  assert.doesNotMatch(out, /showing the first/);
+  assert.match(out, /turn 0[\s\S]*turn 1/, "both are still printed; the operator judges which is which");
+});
+
 test("state none keeps the verb's own message and error", () => {
   assert.equal(render("reset", { ok: true, state: "none", message: "no active run; nothing to reset" }), "no active run; nothing to reset");
   assert.equal(render("reset", { ok: true, state: "none", message: "run 3f2a forgotten; its record is under runs/" }), "run 3f2a forgotten; its record is under runs/");

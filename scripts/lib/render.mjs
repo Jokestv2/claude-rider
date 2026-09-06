@@ -73,8 +73,11 @@ export function renderCheck(r) {
     const turns = r.humanTurnDetails ?? [];
     L.push(RULE("human turns"));
     L.push(`  ${r.humanTurns} turn${r.humanTurns === 1 ? "" : "s"} after launch`);
-    // The binding keeps only the first few, so a short block can be less than the whole story.
+    // The binding keeps only the first few, so a short block can be less than the whole story. A long
+    // one means a nudge went unmarked and is about to read as an intervention: the count is the only
+    // thing that can expose that, and nothing here identifies which entry to drop.
     if (turns.length < r.humanTurns) L.push(`  showing the first ${turns.length} of ${r.humanTurns}`);
+    else if (turns.length > r.humanTurns) L.push(`  ${turns.length} shown, ${r.humanTurns} counted`);
     for (const t of turns) {
       L.push("", `  [${t.at ?? "no timestamp"}] (${t.origin})`);
       for (const l of String(t.text ?? "").split("\n")) L.push(`  ${l}`);
