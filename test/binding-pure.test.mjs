@@ -90,8 +90,14 @@ test("an autocompact summary is not a human turn", () => {
   const h = readTranscript([U("Prompt A…"), A("working…"), COMPACT, A("done.\nSTATUS: code green")].join("\n"));
   assert.equal(h.userTurns, 1, "only the launch prompt counts");
 
-  // A real typed turn still counts, so a genuine intervention is never hidden.
-  const withHuman = readTranscript([U("Prompt A…"), COMPACT, U("actually, stop and mark it green"), A("ok")].join("\n"));
+  // isCompactSummary alone is enough: it is the flag that closes the reported bug.
+  const summaryOnly = JSON.stringify({ type: "user", isCompactSummary: true, message: { role: "user", content: "This session is being continued…" } });
+  assert.equal(readTranscript([U("Prompt A…"), summaryOnly].join("\n")).userTurns, 1);
+
+  // A real typed turn still counts after a compact summary, so a genuine intervention is never
+  // hidden. It is origin-less, so the narrowed fallback clause is what has to admit it.
+  const typed = JSON.stringify({ type: "user", message: { role: "user", content: "actually, stop and mark it green" } });
+  const withHuman = readTranscript([U("Prompt A…"), COMPACT, typed, A("ok")].join("\n"));
   assert.equal(withHuman.userTurns, 2);
 
   // An origin-less string turn that is NOT a compact summary still counts (the fallback survives).
