@@ -54,11 +54,13 @@ between phases**. The graph is enforced by the executor: you can only pick a lab
 - **`intervened`** means a user-role turn beyond the launch reached the session. `check` prints them
   under `── human turns ──`. **Read them before doing anything else.** If the block says
   `showing the first N of M`, treat every turn it did not print as real typed input: relay the block
-  and stop. If every turn shown is plainly not a person — compact-summary boilerplate, an injected
-  notice — judge the phase on its evidence as usual and say in `--because` which turn you discounted
-  and why; `(no origin, string content)` is not a sign either way, since an operator on an older CLI
-  types one too. If any reads as real typed input, do **not** judge its final text: relay the turns
-  verbatim, ask the operator what they did and what they want, and act on their answer.
+  and stop. If it says `N shown, M counted`, the count and the list disagree and the block does not
+  say which one is wrong: relay it and stop there too. If every turn shown is plainly not a person —
+  compact-summary boilerplate, an injected notice — judge the phase on its evidence as usual and say
+  in `--because` which turn you discounted and why; `(no origin, string content)` is not a sign
+  either way, since an operator on an older CLI types one too. If any reads as real typed input, do
+  **not** judge its final text: relay the turns verbatim, ask the operator what they did and what
+  they want, and act on their answer.
 - **`done` with no status hint** (an API error, or a session that just stopped): the final message
   and the evidence decide. If the work is plainly incomplete and the transcript is intact, `resume`
   is usually right; if you cannot tell, `operator` with the reason.
