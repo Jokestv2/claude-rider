@@ -12,6 +12,17 @@ test("sh runs a POSIX command through the resolved shell and captures exit + out
   assert.equal(sh("echo out; echo err 1>&2", { shell }).output, "out\nerr");
 });
 
+test("sh forwards env, and omitting it still inherits the parent", () => {
+  const withEnv = sh("echo \"[$RIDER_WORK_BRANCH]\"", { shell, env: { ...process.env, RIDER_WORK_BRANCH: "feature/r4-grounding" } });
+  assert.equal(withEnv.status, 0);
+  assert.equal(withEnv.output, "[feature/r4-grounding]");
+
+  process.env.RIDER_SH_PROBE = "inherited";
+  try {
+    assert.equal(sh("echo \"$RIDER_SH_PROBE\"", { shell }).output, "inherited");
+  } finally { delete process.env.RIDER_SH_PROBE; }
+});
+
 test("local.shell overrides; capText caps by bytes and says so", () => {
   assert.equal(resolveShell({ shell: "/custom/sh" }), "/custom/sh");
   assert.equal(capText("short", 100), "short");

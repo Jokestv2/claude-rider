@@ -17,11 +17,13 @@ export function start(ctx, { phase = null, dryRun = false } = {}) {
   const def = ctx.rider.phases[target];
   if (!def) return refuse(`no phase "${target}" — phases: ${Object.keys(ctx.rider.phases).join(", ")}`);
   if (def.kind !== "session") return refuse(`"${target}" is a human phase; start names a session phase`);
+  // The run does not exist yet, so intake is told about the branch it is about to be recorded on.
+  const baseBranch = ctx.branch();
   for (const cmd of ctx.rider.intake) {
-    const r = sh(cmd, ctx.shellOpts());
+    const r = sh(cmd, ctx.shellOpts({ phase: target, baseBranch }));
     if (r.status !== 0) return refuse(`intake check failed (exit ${r.status}): ${cmd}${r.output ? `\n${r.output}` : ""}`);
   }
-  const run = newRun({ rider: ctx.rider.name, phase: target, branch: ctx.branch(), now: ctx.now() });
+  const run = newRun({ rider: ctx.rider.name, phase: target, branch: baseBranch, now: ctx.now() });
   return enterPhase(ctx, run, target, { dryRun });
 }
 
@@ -40,7 +42,7 @@ export function enterPhase(ctx, run, phase, { dryRun = false } = {}) {
   if (def.kind === "human") {
     if (dryRun) return { ok: true, state: "dry-run", phase, human: true, check: def.check };
     ctx.saveRun(run);
-    const show = def.show ? sh(def.show, ctx.shellOpts()).output : null;
+    const show = def.show ? sh(def.show, ctx.shellOpts(run)).output : null;
     return { ok: true, state: "human", runId: run.runId, phase, check: def.check, show, totalCost: totalCost(run) };
   }
   const prompt = readFileSync(def.prompt, "utf8");
@@ -128,7 +130,7 @@ export function status(ctx) {
   const sess = currentSession(run);
   const state = def.kind === "human" ? "human" : !sess ? "none" : sess.outcome === "running" ? "running" : sess.outcome === "waiting" ? "waiting" : "finished";
   return {
-    ok: true, state, rider: run.rider, runId: run.runId, phase: run.phase, visits: run.visits, branch: run.branch, startedAt: run.startedAt, watcher, lastEvent,
+    ok: true, state, rider: run.rider, runId: run.runId, phase: run.phase, visits: run.visits, branch: run.branch, baseBranch: run.baseBranch ?? run.branch, workBranch: run.workBranch ?? null, startedAt: run.startedAt, watcher, lastEvent,
     totalCost: totalCost(run),
     sessions: run.sessions.map((s) => ({ phase: s.phase, model: s.model, shortId: s.shortId, id: s.id, outcome: s.outcome, cost: s.cost ?? null, turns: s.turns ?? null, at: s.at, resumedFrom: s.resumedFrom ?? null })),
     transitions: run.transitions, notes: run.notes,

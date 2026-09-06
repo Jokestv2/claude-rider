@@ -243,3 +243,27 @@ test("at a human phase: check fails → human with show; check passes → the ru
   assert.equal(ctx.lastEndedRun().endedBy, "done");
   p.cleanup();
 });
+
+test("workBranch is sticky and reaches the declared commands", () => {
+  let head = "main";
+  // `setup` calls start(ctx), so override ctx.branch before the run is created: newRun records the base.
+  const p = tmpProject();
+  const binding = new FakeBinding({ script: [{ statuses: ["running"] }, { statuses: ["done"], read: { lastText: GREEN } }] });
+  const ctx = makeCtx({ root: p.root, binding });
+  ctx.branch = () => head;
+  try {
+    start(ctx);
+    assert.equal(ctx.loadRun().baseBranch, "main");
+
+    head = "feature/r4-grounding";
+    check(ctx);
+    assert.equal(ctx.loadRun().workBranch, "feature/r4-grounding");
+
+    head = "main"; // the operator checks out the base to merge
+    check(ctx);
+    assert.equal(ctx.loadRun().workBranch, "feature/r4-grounding", "sticky — not cleared");
+
+    assert.equal(ctx.shellOpts(ctx.loadRun()).env.RIDER_WORK_BRANCH, "feature/r4-grounding");
+    assert.equal(ctx.shellOpts(ctx.loadRun()).env.RIDER_BASE_BRANCH, "main");
+  } finally { p.cleanup(); }
+});

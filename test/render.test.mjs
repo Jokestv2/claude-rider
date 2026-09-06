@@ -92,3 +92,12 @@ test("running, none, human and refusal render short", () => {
   assert.match(render("status", { ok: true, state: "none", rider: "lemmaria", watcher: null, lastEvent: null, lastRun: null }), /^rider lemmaria · no active run/);
   assert.match(render("await", { ok: false, state: "timeout", minutes: 60 }), /no event in 60 min/);
 });
+
+test("status renders both branches, and an old run still renders", () => {
+  const base = { rider: "lemmaria", runId: "c84c", phase: "build", visits: { build: 1 }, startedAt: "2026-09-06T06:37:37.845Z", state: "running", watcher: 33268, sessions: [], totalCost: 0 };
+  assert.match(render("status", { ...base, baseBranch: "main", workBranch: "feature/r4-grounding" }), /· base main → work feature\/r4-grounding ·/);
+  assert.match(render("status", { ...base, baseBranch: "main", workBranch: null }), /· branch main ·/);
+  // The in-flight run c84c: only the legacy field exists.
+  assert.match(render("status", { ...base, branch: "main" }), /· branch main ·/);
+  assert.match(render("status", { ...base }), /· branch \? ·/);
+});

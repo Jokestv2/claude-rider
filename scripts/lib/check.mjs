@@ -67,6 +67,7 @@ export function check(ctx) {
     sess.outcome = kind;
     sess.turns = h.turns;
     sess.question = h.question ?? null;
+    noteWorkBranch(ctx, run);
     sess.humanTurns = humanTurns(run, sess, h);
     sess.humanTurnDetails = humanTurnDetails(run, sess, h);
     sess.intervened = sess.humanTurns > 0;
@@ -95,6 +96,7 @@ export function check(ctx) {
     } else if (f.kind === "api-error") sess.doneReason = `ended on an API error (HTTP ${f.status ?? "?"}) with no STATUS line`;
     else sess.doneReason ??= "no STATUS line in the final message";
   }
+  noteWorkBranch(ctx, run);
   sess.outcome = kind;
   sess.stoppedAt = ctx.now().toISOString();
   sess.turns = h.turns;
@@ -112,6 +114,13 @@ export function check(ctx) {
   return result(ctx, run, sess, kind, h.lastText ?? "");
 }
 
+/** Sticky: the branch the work went to. Not cleared when the operator checks out the base for the
+ *  merge — that is exactly when the terminal check needs the feature branch's name. */
+function noteWorkBranch(ctx, run) {
+  const now = ctx.branch();
+  if (now && now !== (run.baseBranch ?? run.branch)) run.workBranch = now;
+}
+
 /** Human-origin user turns beyond the launch prompt and the nudges the rider itself typed. */
 function humanTurns(run, sess, h) { return Math.max(0, (h.userTurns ?? 0) - 1 - chainResumes(run.sessions, sess)); }
 
@@ -122,18 +131,18 @@ function humanTurns(run, sess, h) { return Math.max(0, (h.userTurns ?? 0) - 1 - 
 function humanTurnDetails(run, sess, h) { return (h.userTurnDetails ?? []).slice(1).filter((t) => !t.nudge); }
 
 function checkHuman(ctx, run, def) {
-  const r = sh(def.check, ctx.shellOpts());
+  const r = sh(def.check, ctx.shellOpts(run));
   if (r.status === 0) {
     const reason = `${run.phase}: check passed (${def.check})`;
     ctx.endRun(run, { endedBy: "done", reason });
     return { state: "none", ended: { runId: run.runId, phase: run.phase, reason }, lastRun: run };
   }
-  const show = def.show ? sh(def.show, ctx.shellOpts()).output : null;
+  const show = def.show ? sh(def.show, ctx.shellOpts(run)).output : null;
   return { state: "human", rider: run.rider, runId: run.runId, phase: run.phase, check: def.check, checkExit: r.status, checkOutput: r.output, show, notes: run.notes, totalCost: totalCost(run) };
 }
 
-export function runEvidence(ctx) {
-  return ctx.rider.evidence.map((cmd) => ({ cmd, ...sh(cmd, { ...ctx.shellOpts(), capBytes: EVIDENCE_CAP, timeoutMs: 10_000 }) }));
+export function runEvidence(ctx, run = null) {
+  return ctx.rider.evidence.map((cmd) => ({ cmd, ...sh(cmd, { ...ctx.shellOpts(run), capBytes: EVIDENCE_CAP, timeoutMs: 10_000 }) }));
 }
 
 function result(ctx, run, sess, outcome, finalText, note = null) {
@@ -153,7 +162,7 @@ function result(ctx, run, sess, outcome, finalText, note = null) {
     rateLimit: sess.rateLimit ?? null,
     humanTurns: sess.humanTurns ?? 0, humanTurnDetails: sess.humanTurnDetails ?? [], cost: sess.cost ?? null, turns: sess.turns ?? null, elapsedMs: sess.elapsedMs ?? null,
     question: sess.question ?? null, finalText,
-    evidence: state === "running" ? [] : runEvidence(ctx),
+    evidence: state === "running" ? [] : runEvidence(ctx, run),
     labels: legalLabels(ctx.rider, run.phase), log: sess.log ?? null,
   };
 }

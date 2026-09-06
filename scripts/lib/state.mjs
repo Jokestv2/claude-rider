@@ -22,7 +22,20 @@ export function loadLocal(paths) {
   return { maxWaitHours: 6, pollSeconds: 30, models: {}, advisor: null, claudePath: null, shell: null, permissionMode: "auto", ...readJson(paths.local, {}) };
 }
 export function newRun({ rider, phase, branch, now }) {
-  return { rider, runId: randomBytes(2).toString("hex"), startedAt: now.toISOString(), branch: branch ?? null, phase, visits: {}, transitions: [], sessions: [], notes: [] };
+  // `branch` is a legacy mirror of `baseBranch`: the npm-installed CLI and the plugin copy read the
+  // same run.json and may differ in version, so a run written by the newer one must still render in
+  // the older. Read the pair everywhere as `run.baseBranch ?? run.branch`.
+  return { rider, runId: randomBytes(2).toString("hex"), startedAt: now.toISOString(), baseBranch: branch ?? null, branch: branch ?? null, phase, visits: {}, transitions: [], sessions: [], notes: [] };
+}
+/** What a RIDER.md-declared command (intake, check, show, evidence) is told about the run. */
+export function riderEnv(rider, run) {
+  return {
+    RIDER_NAME: rider?.name ?? "",
+    RIDER_RUN_ID: run?.runId ?? "",
+    RIDER_PHASE: run?.phase ?? "",
+    RIDER_BASE_BRANCH: run?.baseBranch ?? run?.branch ?? "",
+    RIDER_WORK_BRANCH: run?.workBranch ?? "",
+  };
 }
 /** A run ends by a passing human check (`done`), at `operator`, or by `reset`; its record moves to runs/. */
 export function endRun(paths, run, { endedBy, reason = null, now }) {

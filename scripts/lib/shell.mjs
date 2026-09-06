@@ -12,8 +12,9 @@ export function resolveShell(local = {}) {
   return "bash.exe";
 }
 
-export function sh(cmd, { cwd = process.cwd(), shell = resolveShell(), timeoutMs = 30_000, capBytes = 2048 } = {}) {
-  const r = spawnSync(shell, ["-c", cmd], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: timeoutMs, maxBuffer: 8 * 1024 * 1024, windowsHide: true });
+export function sh(cmd, { cwd = process.cwd(), shell = resolveShell(), timeoutMs = 30_000, capBytes = 2048, env = undefined } = {}) {
+  // `env: undefined` is spawnSync's "inherit process.env", so callers that pass no env are unchanged.
+  const r = spawnSync(shell, ["-c", cmd], { cwd, env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: timeoutMs, maxBuffer: 8 * 1024 * 1024, windowsHide: true });
   const output = capText(`${r.stdout ?? ""}${r.stderr ?? ""}`.trim(), capBytes);
   return { status: r.error ? -1 : r.status, output, error: r.error?.message ?? null };
 }

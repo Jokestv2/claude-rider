@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { appendEvent, chainCost, chainResumes, consecutiveRateLimitResumes, currentSession, endRun, ensureDirs, lastEndedRun, loadLocal, loadRun, newRun, readEvents, readJson, saveRun, statePaths, totalCost, writeLog } from "../scripts/lib/state.mjs";
+import { appendEvent, chainCost, chainResumes, consecutiveRateLimitResumes, currentSession, endRun, ensureDirs, lastEndedRun, loadLocal, loadRun, newRun, readEvents, readJson, riderEnv, saveRun, statePaths, totalCost, writeLog } from "../scripts/lib/state.mjs";
 
 const now = new Date("2026-09-03T12:00:00Z");
 const R = (phase, id, { cost = null, resumedFrom = null, resumeReason = null, at = null } = {}) => ({ phase, id, cost, resumedFrom, resumeReason, at, outcome: "done" });
@@ -30,6 +30,27 @@ test("a run is created, saved, ended into runs/, and found again as the last end
   assert.ok(existsSync(log));
   assert.deepEqual(loadLocal(paths), { maxWaitHours: 6, pollSeconds: 30, models: {}, advisor: null, claudePath: null, shell: null, permissionMode: "auto" });
   rmSync(root, { recursive: true, force: true });
+});
+
+test("a run records base and work branch, and an old run still reads", () => {
+  const run = newRun({ rider: "lemmaria", phase: "plan", branch: "main", now: new Date("2026-09-06T06:37:37Z") });
+  assert.equal(run.baseBranch, "main");
+  assert.equal(run.branch, "main", "legacy mirror, so an older executor still renders");
+  assert.equal(run.workBranch, undefined);
+
+  assert.deepEqual(riderEnv({ name: "lemmaria" }, { runId: "c84c", phase: "build", baseBranch: "main", workBranch: "feature/r4-grounding" }), {
+    RIDER_NAME: "lemmaria", RIDER_RUN_ID: "c84c", RIDER_PHASE: "build",
+    RIDER_BASE_BRANCH: "main", RIDER_WORK_BRANCH: "feature/r4-grounding",
+  });
+
+  // An old-shape run (only `branch`) still yields a base, and an absent work branch is "".
+  assert.deepEqual(riderEnv({ name: "lemmaria" }, { runId: "c84c", phase: "merge", branch: "main" }), {
+    RIDER_NAME: "lemmaria", RIDER_RUN_ID: "c84c", RIDER_PHASE: "merge",
+    RIDER_BASE_BRANCH: "main", RIDER_WORK_BRANCH: "",
+  });
+
+  // No run at all (intake, before newRun) must not throw.
+  assert.equal(riderEnv({ name: "lemmaria" }, null).RIDER_RUN_ID, "");
 });
 
 test("a corrupt state file names itself in the error", () => {
