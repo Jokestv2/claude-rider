@@ -138,6 +138,16 @@ test("counted user turns are retained, capped and labelled", () => {
   assert.equal(readTranscript(many.join("\n")).userTurnDetails.length, 10, "at most 10 entries are kept");
 });
 
+test("the rider's own resume nudge is recorded as a nudge", () => {
+  // The nudge is the rider typing, not the operator. Marking it here — where the text is owned — lets
+  // `check` drop it by identity instead of by position: after a resume it is NOT the second turn.
+  const h = readTranscript([U("Prompt A…"), U("actually, stop"), U(RESUME_NUDGE), A("ok")].join("\n"));
+  assert.deepEqual(h.userTurnDetails.map((t) => t.nudge), [false, false, true]);
+  assert.equal(h.userTurnDetails[2].truncated, false, "under the cap, so the nudge is stored whole and can match exactly");
+  // A turn that merely quotes the nudge is not the nudge.
+  assert.equal(readTranscript(U(`the rider said: ${RESUME_NUDGE}`)).userTurnDetails[0].nudge, false);
+});
+
 test("rate-limit and API-error classification", () => {
   const limit = "You've hit your session limit - resets 1:40am (America/Toronto)";
   assert.equal(classifyNoMarker({ api_error_status: 429 }, "").kind, "rate-limited");

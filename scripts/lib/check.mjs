@@ -115,8 +115,11 @@ export function check(ctx) {
 /** Human-origin user turns beyond the launch prompt and the nudges the rider itself typed. */
 function humanTurns(run, sess, h) { return Math.max(0, (h.userTurns ?? 0) - 1 - chainResumes(run.sessions, sess)); }
 
-/** The same turns `humanTurns` counts: the launch prompt and the rider's own resume nudges dropped. */
-function humanTurnDetails(run, sess, h) { return (h.userTurnDetails ?? []).slice(1 + chainResumes(run.sessions, sess)); }
+/** The same turns `humanTurns` counts: the launch prompt (always the first counted turn) dropped, then
+ *  every nudge the rider typed. The nudges go by identity, not by position — a nudge follows whatever
+ *  the operator typed in the previous stretch, so dropping a fixed prefix would hide that turn and show
+ *  the nudge as the intervention. `humanTurns` stays arithmetic: a count is right in any order. */
+function humanTurnDetails(run, sess, h) { return (h.userTurnDetails ?? []).slice(1).filter((t) => !t.nudge); }
 
 function checkHuman(ctx, run, def) {
   const r = sh(def.check, ctx.shellOpts());

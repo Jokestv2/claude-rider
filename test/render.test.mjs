@@ -25,13 +25,15 @@ test("the check block has the §4.4 shape", () => {
   assert.match(out, /── legal labels: code green → close · blocked → operator · resume · operator$/);
 });
 
+// A stopped session with a human turn in it: the shape the `── human turns ──` section renders from.
+const base = {
+  rider: "lemmaria", runId: "c84c", phase: "build", visit: 1,
+  session: { shortId: "4c511ecd" }, attach: "claude attach 4c511ecd",
+  state: "intervened", statusHint: "STATUS: code green", resumes: 0,
+  cost: 52.43, turns: 433, elapsedMs: 4_860_000, finalText: "done.", labels: [],
+};
+
 test("the human-turns section prints the turns the count refers to", () => {
-  const base = {
-    rider: "lemmaria", runId: "c84c", phase: "build", visit: 1,
-    session: { shortId: "4c511ecd" }, attach: "claude attach 4c511ecd",
-    state: "intervened", statusHint: "STATUS: code green", resumes: 0,
-    cost: 52.43, turns: 433, elapsedMs: 4_860_000, finalText: "done.", labels: [],
-  };
   const out = renderCheck({
     ...base,
     humanTurns: 1,
@@ -49,6 +51,16 @@ test("the human-turns section prints the turns the count refers to", () => {
     { at: null, origin: "human", bytes: 3, text: "why", truncated: false },
   ] }), /2 turns after launch/);
   assert.doesNotMatch(renderCheck({ ...base, humanTurns: 0, humanTurnDetails: [] }), /human turns ─/);
+});
+
+test("a capped list of human turns says so; an uncapped one adds no line", () => {
+  const turn = (i) => ({ at: null, origin: "human", bytes: 6, text: `turn ${i}`, truncated: false });
+  // The binding keeps at most 10 details, so a long intervention can show fewer turns than it counts.
+  const capped = renderCheck({ ...base, humanTurns: 13, humanTurnDetails: Array.from({ length: 9 }, (_, i) => turn(i)) });
+  assert.match(capped, /13 turns after launch\n  showing the first 9 of 13\n/);
+  assert.doesNotMatch(renderCheck({ ...base, humanTurns: 2, humanTurnDetails: [turn(0), turn(1)] }), /showing the first/);
+  // A run record written before the details existed: the section is honest about having none to show.
+  assert.match(renderCheck({ ...base, humanTurns: 1, humanTurnDetails: [] }), /showing the first 0 of 1/);
 });
 
 test("state none keeps the verb's own message and error", () => {

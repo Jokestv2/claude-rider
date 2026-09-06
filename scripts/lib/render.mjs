@@ -70,9 +70,12 @@ export function renderCheck(r) {
   // Before the final message on purpose: whether the judge may judge that text at all depends on
   // who these turns came from, so it has to read them first.
   if (r.humanTurns > 0) {
+    const turns = r.humanTurnDetails ?? [];
     L.push(RULE("human turns"));
     L.push(`  ${r.humanTurns} turn${r.humanTurns === 1 ? "" : "s"} after launch`);
-    for (const t of r.humanTurnDetails ?? []) {
+    // The binding keeps only the first few, so a short block can be less than the whole story.
+    if (turns.length < r.humanTurns) L.push(`  showing the first ${turns.length} of ${r.humanTurns}`);
+    for (const t of turns) {
       L.push("", `  [${t.at ?? "no timestamp"}] (${t.origin})`);
       for (const l of String(t.text ?? "").split("\n")) L.push(`  ${l}`);
       if (t.truncated) L.push(`  … ${t.bytes} bytes total, cut`);

@@ -3,9 +3,10 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { RESUME_NUDGE } from "../scripts/bindings/claude-code.mjs";
 import { check } from "../scripts/lib/check.mjs";
 import { renderCheck } from "../scripts/lib/render.mjs";
-import { start } from "../scripts/lib/verbs.mjs";
+import { resume, start } from "../scripts/lib/verbs.mjs";
 import { FakeBinding } from "./fake-binding.mjs";
 import { FakeClock, makeCtx, tmpProject } from "./helpers.mjs";
 
@@ -184,6 +185,34 @@ test("the launch prompt is never shown as an intervention", () => {
     assert.deepEqual(r.humanTurnDetails, [details[1]], "the launch prompt is dropped, not shown");
     assert.match(renderCheck(r), /1 turn after launch/);
     assert.doesNotMatch(renderCheck(r), /Prompt A/);
+  } finally { p.cleanup(); }
+});
+
+test("after a resume the nudge is dropped by identity, not by position", () => {
+  // Chronological order in a resumed chain: launch, whatever the operator typed in stretch one, then
+  // the rider's nudge. Dropping a fixed prefix would keep the nudge and hide the operator's turn.
+  const launch = { at: "t0", origin: "human", bytes: 9, text: "Prompt A…", truncated: false, nudge: false };
+  const typed = { at: "t1", origin: "human", bytes: 14, text: "actually, stop", truncated: false, nudge: false };
+  const nudge = { at: "t2", origin: "human", bytes: RESUME_NUDGE.length, text: RESUME_NUDGE, truncated: false, nudge: true };
+  const p = tmpProject();
+  const binding = new FakeBinding({ script: [
+    { statuses: ["done"], read: { lastText: null, signal: "API Error: 429 rate limit exceeded - resets 1:40am (UTC)", turns: 20, userTurns: 2, userTurnDetails: [launch, typed] } },
+    { statuses: ["done"], read: { lastText: GREEN, turns: 35, userTurns: 3, userTurnDetails: [launch, typed, nudge] } },
+  ] });
+  const ctx = makeCtx({ root: p.root, binding });
+  try {
+    start(ctx);
+    // The operator typed in this stretch, so it reads intervened over its rate-limited outcome.
+    assert.deepEqual([check(ctx).state, check(ctx).outcome], ["intervened", "rate-limited"]);
+    resume(ctx, { reason: "rate-limit" });
+    const r = check(ctx);
+    assert.equal(r.resumes, 1);
+    assert.equal(r.humanTurns, 1, "launch and one nudge subtracted from three counted turns");
+    assert.deepEqual(r.humanTurnDetails, [typed], "the operator's turn, not the nudge that follows it");
+    const out = renderCheck(r);
+    assert.match(out, /actually, stop/);
+    assert.doesNotMatch(out, /Your previous turn was interrupted/);
+    assert.doesNotMatch(out, /Prompt A/);
   } finally { p.cleanup(); }
 });
 

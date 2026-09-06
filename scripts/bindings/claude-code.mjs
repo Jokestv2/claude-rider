@@ -83,6 +83,10 @@ export function readTranscript(text) {
             bytes: Buffer.byteLength(text),
             text: truncated ? text.slice(0, TURN_TEXT_MAX) : text,
             truncated,
+            // The rider typed this one, not the operator. Marked here because this file owns the text;
+            // it lets `check` drop nudges by identity, which position cannot do — after a resume the
+            // nudge follows any turn the operator made in the previous stretch.
+            nudge: text === RESUME_NUDGE,
           });
         }
       }
