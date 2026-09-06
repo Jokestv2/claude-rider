@@ -94,6 +94,10 @@ test("an autocompact summary is not a human turn", () => {
   const summaryOnly = JSON.stringify({ type: "user", isCompactSummary: true, message: { role: "user", content: "This session is being continued…" } });
   assert.equal(readTranscript([U("Prompt A…"), summaryOnly].join("\n")).userTurns, 1);
 
+  // isVisibleInTranscriptOnly alone is enough too: an entry injected for display is not typed.
+  const visibleOnly = JSON.stringify({ type: "user", isVisibleInTranscriptOnly: true, message: { role: "user", content: "This session is being continued…" } });
+  assert.equal(readTranscript([U("Prompt A…"), visibleOnly].join("\n")).userTurns, 1);
+
   // A real typed turn still counts after a compact summary, so a genuine intervention is never
   // hidden. It is origin-less, so the narrowed fallback clause is what has to admit it.
   const typed = JSON.stringify({ type: "user", message: { role: "user", content: "actually, stop and mark it green" } });
