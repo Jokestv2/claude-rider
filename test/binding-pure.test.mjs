@@ -138,14 +138,26 @@ test("counted user turns are retained, capped and labelled", () => {
   assert.equal(readTranscript(many.join("\n")).userTurnDetails.length, 10, "at most 10 entries are kept");
 });
 
-test("the rider's own resume nudge is recorded as a nudge", () => {
-  // The nudge is the rider typing, not the operator. Marking it here — where the text is owned — lets
-  // `check` drop it by identity instead of by position: after a resume it is NOT the second turn.
+test("the rider's own resume nudge is counted but spends no detail slot", () => {
+  // The nudge is the rider typing, not the operator: it is still a counted user turn (`check`
+  // subtracts it arithmetically), but keeping it would spend one of the few slots the operator's
+  // turns need — launch plus nine nudges would fill the cap, and the turn that follows, the one the
+  // judge must stop on, would never be stored at all.
   const h = readTranscript([U("Prompt A…"), U("actually, stop"), U(RESUME_NUDGE), A("ok")].join("\n"));
-  assert.deepEqual(h.userTurnDetails.map((t) => t.nudge), [false, false, true]);
-  assert.equal(h.userTurnDetails[2].truncated, false, "under the cap, so the nudge is stored whole and can match exactly");
-  // A turn that merely quotes the nudge is not the nudge.
-  assert.equal(readTranscript(U(`the rider said: ${RESUME_NUDGE}`)).userTurnDetails[0].nudge, false);
+  assert.equal(h.userTurns, 3, "a nudge is still counted");
+  assert.deepEqual(h.userTurnDetails.map((t) => t.text), ["Prompt A…", "actually, stop"]);
+  assert.deepEqual(h.userTurnDetails.map((t) => t.nudge), [false, false]);
+
+  // A turn that merely quotes the nudge is not the nudge: it is stored, marked `nudge: false`, and
+  // `check` will show it — which is what keeps render's "more shown than counted" signal reachable.
+  const quoted = readTranscript(U(`the rider said: ${RESUME_NUDGE}`)).userTurnDetails;
+  assert.equal(quoted.length, 1);
+  assert.equal(quoted[0].nudge, false);
+
+  // The resume-heavy phase these fixes were built for: launch, ten nudges, then the operator.
+  const many = readTranscript([U("Prompt A…"), ...Array.from({ length: 10 }, () => U(RESUME_NUDGE)), U("stop, this is wrong")].join("\n"));
+  assert.equal(many.userTurns, 12);
+  assert.deepEqual(many.userTurnDetails.map((t) => t.text), ["Prompt A…", "stop, this is wrong"]);
 });
 
 test("rate-limit and API-error classification", () => {

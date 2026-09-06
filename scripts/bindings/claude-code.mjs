@@ -72,10 +72,16 @@ export function readTranscript(text) {
         (d.origin === undefined && typeof raw === "string" && !d.isCompactSummary && !d.isVisibleInTranscriptOnly)
       ) {
         out.userTurns++;
+        const text = content.filter((b) => b.type === "text").map((b) => b.text).join("\n");
+        // The rider typed this one, not the operator. Matched here because this file owns the text;
+        // it lets `check` drop nudges by identity, which position cannot do — after a resume the
+        // nudge follows any turn the operator made in the previous stretch.
+        const isNudge = text === RESUME_NUDGE;
         // The judge is told a human turn happened; without the text it can only interrogate the
         // operator about something already on disk. Capped so a pasted file cannot flood the block.
-        if (out.userTurnDetails.length < TURN_DETAILS_MAX) {
-          const text = content.filter((b) => b.type === "text").map((b) => b.text).join("\n");
+        // A matched nudge spends no slot: launch plus nine nudges would otherwise fill the cap, and
+        // the operator turn after that — the one the judge must stop on — would never be stored.
+        if (!isNudge && out.userTurnDetails.length < TURN_DETAILS_MAX) {
           const truncated = text.length > TURN_TEXT_MAX;
           out.userTurnDetails.push({
             at: typeof d.timestamp === "string" ? d.timestamp : null,
@@ -83,10 +89,7 @@ export function readTranscript(text) {
             bytes: Buffer.byteLength(text),
             text: truncated ? text.slice(0, TURN_TEXT_MAX) : text,
             truncated,
-            // The rider typed this one, not the operator. Marked here because this file owns the text;
-            // it lets `check` drop nudges by identity, which position cannot do — after a resume the
-            // nudge follows any turn the operator made in the previous stretch.
-            nudge: text === RESUME_NUDGE,
+            nudge: isNudge,
           });
         }
       }
