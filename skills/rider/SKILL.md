@@ -1,6 +1,7 @@
 ---
 name: rider
 description: "Drive the project's rider (riders/<name>/RIDER.md) one phase at a time. Use when the operator types /rider, or asks to start, continue, check, or resume the rider. You are the judge: you read a finished phase and pick one of its declared outcome labels; you never do the phase's work."
+argument-hint: "[start <phase>]"
 allowed-tools: ["Bash(node ${CLAUDE_PLUGIN_ROOT}/scripts/rider.mjs:*)"]
 ---
 
@@ -10,6 +11,23 @@ The executor is `node "${CLAUDE_PLUGIN_ROOT}/scripts/rider.mjs"` (below: `rider 
 project root through the Bash tool. It launches, watches and stops the phase sessions; **you judge
 between phases**. The graph is enforced by the executor: you can only pick a label it lists.
 
+## What the operator typed
+
+**`$ARGUMENTS` is an ENTRY instruction and nothing else.** The one form is `start <phase>` — e.g.
+`/rider:rider start build` — naming the phase a **fresh** run begins at, for a graph whose earlier
+phases are already done: a milestone whose plan already exists starts at `build`, not at `plan`.
+Empty is the normal case and means *start at the graph's declared `start:`*. A plain-English ask
+that names a phase is the same instruction ("start it at build"); anything you cannot read as a
+phase name, ask about rather than guess.
+
+**It is read in step 2's `none` branch and NOWHERE else.** If `status` reports `running`,
+`finished`, `waiting` or `human`, a run already exists and the argument is **stale by
+definition** — this conversation autocompacts and re-enters the skill carrying whatever was typed
+long ago, and a phase already under way cannot be entered again. Ignore it there without
+narrating it: `rider status` is the truth. An argument never selects an edge, never re-enters or
+skips a phase mid-run, and never overrides the graph — those are the executor's, and step 2's
+rules are unchanged by anything the operator typed.
+
 ## Every invocation, in this order
 
 1. **Re-orient from the executor, never from chat memory.** Run `rider status`. The conversation
@@ -17,7 +35,10 @@ between phases**. The graph is enforced by the executor: you can only pick a lab
    Then read the body of `riders/<name>/RIDER.md` — the prose under the frontmatter — once per
    invocation: it states the task class and what each label means, and you judge against that.
 2. Act on `state:`
-   - **none** → `rider start`. If it refuses (an intake check failed), report the failing command
+   - **none** → `rider start` — or `rider start <phase>` when `$ARGUMENTS` named one. Pass the
+     phase through rather than validating it yourself: an unknown phase is the executor's to
+     refuse, and its refusal is the message the operator needs. If it refuses (an intake check
+     failed, or the phase is not one the graph declares), report the failing command
      and its output to the operator and stop. If it started a phase, arm the watch (step 3) and stop.
      If `status` names a last run that ended at `operator`, present its reason first — the operator
      may want to direct before a fresh run starts; do not `start` in that case unless they said so.
