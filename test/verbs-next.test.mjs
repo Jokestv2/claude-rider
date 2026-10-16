@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { check } from "../scripts/lib/check.mjs";
 import { next, note, reset, resume, start, status } from "../scripts/lib/verbs.mjs";
 import { FakeBinding } from "./fake-binding.mjs";
-import { TEST_RIDER_MD, makeCtx, tmpProject } from "./helpers.mjs";
+import { TEST_RIDER_MD, makeCtx, settled, tmpProject } from "./helpers.mjs";
 
 const done = (lastText, extra = {}) => ({ statuses: ["done"], read: { lastText, ...extra } });
 const GREEN = "STATUS: planned\n<promise>MILESTONE PLANNED</promise>";
@@ -100,7 +100,7 @@ test("resume re-enters the same session: bare when listed, with options when not
   const ctx = makeCtx({ root: p.root, binding });
   start(ctx);
   assert.match(resume(ctx).error, /is running — rider check first/);
-  assert.equal(check(ctx).state, "rate-limited");
+  assert.equal(settled(check, ctx).state, "rate-limited");
   const r = resume(ctx, { reason: "rate-limit" });
   assert.equal(r.state, "running");
   assert.equal(r.resumed, "sess-1");

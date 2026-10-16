@@ -27,6 +27,19 @@ test("launch argv is the v2 shape and the session id comes from the registry", (
   assert.deepEqual(calls[1].slice(0, 3), ["claude-x", "agents", "--json"]);
 });
 
+test("launchArgs pin what a session would otherwise inherit, ahead of the rider's own flags", () => {
+  const b = createBinding({ launchArgs: ["--effort", "high", "--settings", "{\"outputStyle\":\"default\"}"], exec: fakeExec({}).exec, sleep: () => {} });
+  const argv = b.dryRun.launchArgv("PROMPT", { model: "opus", name: "n" });
+  // Ahead of `-n`: a variadic flag among them then ends at the rider's first flag, not at the prompt.
+  assert.deepEqual(argv.slice(0, 6), ["--bg", "--effort", "high", "--settings", "{\"outputStyle\":\"default\"}", "-n"]);
+  assert.equal(argv.at(-1), "PROMPT");
+  // An unlisted resume is a relaunch and is pinned the same way; a listed one keeps the session it has.
+  assert.deepEqual(b.dryRun.resumeArgv("id", { listed: false, model: "opus", name: "n" }).slice(1, 3), ["--effort", "high"]);
+  assert.equal(b.dryRun.resumeArgv("id", { listed: true, model: "opus", name: "n" }).includes("--effort"), false);
+  // A bare string would spread into one argv element per character: refused by name instead.
+  assert.throws(() => createBinding({ launchArgs: "--effort high" }), /launchArgs in local\.json must be a list of strings/);
+});
+
 test("a listed session is resumed BARE; an unlisted one gets its options again", () => {
   const b = createBinding({ exec: fakeExec({ launch: launchLine, agents: registry }).exec, sleep: () => {} });
   assert.deepEqual(b.dryRun.resumeArgv("full-id-1", { listed: true, model: "opus", name: "n" }), ["--bg", "--resume", "full-id-1", RESUME_NUDGE]);

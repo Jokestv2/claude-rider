@@ -49,9 +49,22 @@ export function check(ctx) {
 
   if (kind === "done" && h.turns <= (sess.baselineTurns ?? 0) && elapsed < DONE_GRACE_MS) kind = "running";
 
+  // A `done` is followed by a destructive `stop`, and one registry sample is not proof the session
+  // stopped: run 7cb5's close session was sampled idle in the two seconds between its subagent
+  // finishing and the harness waking it, and was stopped mid-hand-back. A STATUS line corroborates the
+  // registry in the session's own words; a bare `done` has only the registry, so it is confirmed first.
+  // `sightings` counts consecutive bare-done checks over an unchanged transcript.
+  if (kind === "done" && statusHint(h.lastText) === null) {
+    const sightings = sess.bareDone?.turns === h.turns ? sess.bareDone.sightings + 1 : 1;
+    sess.bareDone = { turns: h.turns, sightings };
+    if (!bareDoneConfirmed({ sightings, entry: st.entry, h })) { kind = "running"; note = "idle with no STATUS line; confirming on the next check"; }
+  } else sess.bareDone = null;
+
   if (kind === "waiting") {
     for (let i = 0; i < 10 && !h.question; i++) { ctx.sleep(SETTLE_MS); h = ctx.binding.read(ids); }
-    if (waitingIsDone(h)) { kind = "done"; sess.doneReason = "wrote its STATUS line, then asked in prose"; }
+    // Only what is known. That the session "asked in prose" was an inference, and a wrong one five
+    // times in six: whether the final message asks for anything is the judge's to read.
+    if (waitingIsDone(h)) { kind = "done"; sess.doneReason = "registry reports the session waiting for input; no AskUserQuestion is pending and its final message carries a STATUS line"; }
   }
 
   if (kind === "running" && note === null) {
@@ -106,8 +119,11 @@ export function check(ctx) {
   sess.humanTurns = humanTurns(run, sess, h);
   sess.humanTurnDetails = humanTurnDetails(run, sess, h);
   sess.intervened = sess.humanTurns > 0;
+  // What the session actually ran under. The rider sets a model and a permission mode; everything else
+  // is the operator's ambient setup, and cost compared across runs is confounded by settings nobody recorded.
+  sess.harness = h.harness ?? null;
   sess.log = ctx.writeLog(`${sess.stoppedAt.replace(/[:.]/g, "-")}-${run.phase}-${sess.shortId ?? "id"}.json`, {
-    runId: run.runId, phase: run.phase, ...ids, outcome: kind, entry: st.entry ?? null, resetAt,
+    runId: run.runId, phase: run.phase, ...ids, outcome: kind, entry: st.entry ?? null, resetAt, harness: sess.harness,
     cost: h.cost, turns: h.turns, userTurns: h.userTurns, question: h.question, lastText: h.lastText, lastAt: h.lastAt ?? null, signal: h.signal, transcript: h.transcript, tail: h.tail,
   });
   ctx.saveRun(run);
@@ -115,10 +131,28 @@ export function check(ctx) {
 }
 
 /** Sticky: the branch the work went to. Not cleared when the operator checks out the base for the
- *  merge — that is exactly when the terminal check needs the feature branch's name. */
+ *  merge — that is exactly when the terminal check needs the feature branch's name. Its tip is kept
+ *  beside it because a name does not survive the branch being deleted after the merge, and a sha does. */
 function noteWorkBranch(ctx, run) {
   const now = ctx.branch();
-  if (now && now !== baseOf(run)) run.workBranch = now;
+  if (!now || now === baseOf(run)) return;
+  run.workBranch = now;
+  const tip = ctx.tip("HEAD");
+  if (tip) run.workTip = tip;
+}
+
+/** The one policy decision in confirming a bare `done` (see its call site): may `check` act on it now?
+ *  `sightings` — consecutive bare-done checks over an unchanged transcript, this one included (>= 1).
+ *  The call site also offers the registry `entry` and the transcript read `h`, unused on purpose.
+ *  Returning false costs one poll interval before the stop is acted on; returning true on a sample
+ *  taken mid-hand-back stops a live, paid session. */
+function bareDoneConfirmed({ sightings }) {
+  // Two looks over an unchanged transcript, the rule `gone` already lives by. Deliberately blind to
+  // `entry.state`: it read `done` on every real stop in the first 21 harvests and `working` on 7cb5's
+  // false one, but it also read `working` on two real stops, and nothing documents what it means — the
+  // field that would let a stop skip the second look is the same kind of sample that caused the bug.
+  // A rate limit or an API error waits one poll like the rest: nothing is running, so nothing is lost.
+  return sightings >= 2;
 }
 
 /** Human-origin user turns beyond the launch prompt and the nudges the rider itself typed. */
@@ -131,14 +165,31 @@ function humanTurns(run, sess, h) { return Math.max(0, (h.userTurns ?? 0) - 1 - 
 function humanTurnDetails(run, sess, h) { return (h.userTurnDetails ?? []).slice(1).filter((t) => !t.nudge); }
 
 function checkHuman(ctx, run, def) {
+  // The work branch keeps moving at a human phase — the operator's gate-review fixes land on it. Follow
+  // it while it resolves, so `$RIDER_WORK_TIP` is the tip that has to reach the base; once the branch is
+  // deleted the last sighting stands, which is exactly when a check by name could no longer answer.
+  const tip = run.workBranch ? ctx.tip(`refs/heads/${run.workBranch}`) : null;
+  if (tip && tip !== run.workTip) { run.workTip = tip; ctx.saveRun(run); }
   const r = sh(def.check, ctx.shellOpts(run));
   if (r.status === 0) {
+    noteAfterHandoff(ctx, run, tip);
     const reason = `${run.phase}: check passed (${def.check})`;
     ctx.endRun(run, { endedBy: "done", reason });
     return { state: "none", ended: { runId: run.runId, phase: run.phase, reason }, lastRun: run };
   }
   const show = def.show ? sh(def.show, ctx.shellOpts(run)).output : null;
   return { state: "human", rider: run.rider, runId: run.runId, phase: run.phase, check: def.check, checkExit: r.status, checkOutput: r.output, show, notes: run.notes, totalCost: totalCost(run) };
+}
+
+/** Gate precision, mechanically: the commits that landed after the sessions handed over — every one is
+ *  something the last session phase called finished and the human phase did not. Read from the work
+ *  branch while it exists, and from the base once it is deleted (the merge put them there; `ref` says
+ *  which was read, since the base can also carry commits that are not this run's). */
+function noteAfterHandoff(ctx, run, branchTip) {
+  if (!run.handoff?.tip) return;
+  const ref = branchTip ? run.workBranch : baseOf(run);
+  const commits = ref ? ctx.commitsBetween(run.handoff.tip, ref) : null;
+  if (commits) run.handoff.after = { ref, commits };
 }
 
 export function runEvidence(ctx, run) {
@@ -159,7 +210,7 @@ function result(ctx, run, sess, outcome, finalText, note = null) {
     doneReason: sess.doneReason ?? null,
     resumes: chainResumes(run.sessions, sess),
     lastResume: sess.resumedFrom ? { reason: sess.resumeReason, at: sess.at } : null,
-    rateLimit: sess.rateLimit ?? null,
+    rateLimit: sess.rateLimit ?? null, harness: sess.harness ?? null,
     humanTurns: sess.humanTurns ?? 0, humanTurnDetails: sess.humanTurnDetails ?? [], cost: sess.cost ?? null, turns: sess.turns ?? null, elapsedMs: sess.elapsedMs ?? null,
     question: sess.question ?? null, finalText,
     evidence: state === "running" ? [] : runEvidence(ctx, run),

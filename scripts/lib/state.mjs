@@ -19,7 +19,7 @@ export function loadRun(paths) { return readJson(paths.run, null); }
 export function saveRun(paths, run) { writeJson(paths.run, run); }
 /** Machine facts and overrides (§4.2). Keys not listed here are kept but unused. */
 export function loadLocal(paths) {
-  return { maxWaitHours: 6, pollSeconds: 30, models: {}, advisor: null, claudePath: null, shell: null, permissionMode: "auto", ...readJson(paths.local, {}) };
+  return { maxWaitHours: 6, pollSeconds: 30, models: {}, advisor: null, launchArgs: [], claudePath: null, shell: null, permissionMode: "auto", ...readJson(paths.local, {}) };
 }
 export function newRun({ rider, phase, branch, now }) {
   // `branch` is a legacy mirror of `baseBranch`: the npm-installed CLI and the plugin copy read the
@@ -40,16 +40,30 @@ export function riderEnv(rider, run) {
     RIDER_PHASE: run?.phase ?? "",
     RIDER_BASE_BRANCH: baseOf(run) ?? "",
     RIDER_WORK_BRANCH: run?.workBranch ?? "",
+    RIDER_WORK_TIP: run?.workTip ?? "",
   };
 }
+const endedRunPath = (paths, run) => join(paths.runs, `${run.startedAt.replace(/[:.]/g, "-")}-${run.runId}.json`);
 /** A run ends by a passing human check (`done`), at `operator`, or by `reset`; its record moves to runs/. */
 export function endRun(paths, run, { endedBy, reason = null, now }) {
   run.endedAt = now.toISOString();
   run.endedBy = endedBy;
   run.reason = reason;
   ensureDirs(paths);
-  writeJson(join(paths.runs, `${run.startedAt.replace(/[:.]/g, "-")}-${run.runId}.json`), run);
+  writeJson(endedRunPath(paths, run), run);
   rmSync(paths.run, { force: true });
+  return run;
+}
+/** Rewrite an ended run's record in place: a note that arrives after the run ended still belongs to it. */
+export function saveEndedRun(paths, run) { writeJson(endedRunPath(paths, run), run); }
+/** The inverse of `endRun`, for `overrule`: the record moves back to run.json and is a live run again.
+ *  The ending it undoes is not erased — the transition that caused it stays in `transitions`. */
+export function reviveRun(paths, run) {
+  delete run.endedAt;
+  delete run.endedBy;
+  delete run.reason;
+  saveRun(paths, run);
+  rmSync(endedRunPath(paths, run), { force: true });
   return run;
 }
 export function lastEndedRun(paths) {

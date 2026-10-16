@@ -60,7 +60,9 @@ test("429 twice mid-plan: both waited out inside the watch, resumed twice, then 
   // both waits happened inside the watch: the clock sits past the second reset + 60 s, and the last stretch took one
   // running poll to sign off — the grace window would have cost twenty
   assert.ok(t.clock.t >= t0 + 66 * 60_000, `clock advanced ${(t.clock.t - t0) / 60_000} min`);
-  assert.equal(t.clock.slept.filter((ms) => ms === 30_000).length, 1);
+  // …plus one confirming poll per rate-limited stop: a `done` with no STATUS line is looked at twice before it is
+  // believed (`bareDoneConfirmed`), and a rate limit is such a stop.
+  assert.equal(t.clock.slept.filter((ms) => ms === 30_000).length, 3);
   t.p.cleanup();
 });
 

@@ -7,6 +7,16 @@ import { baseOf, currentSession, newRun, totalCost } from "./state.mjs";
 export function refuse(error) { return { ok: false, error }; }
 
 const labelList = (ctx, phase) => legalLabels(ctx.rider, phase).map((l) => l.label).join(" · ");
+/** The edges `overrule` may take: the ones that leave for another phase. `operator` again is no ruling,
+ *  and `resume` re-enters a session with a nudge that says the environment cut it short — untrue of a
+ *  judged stop. */
+const onwardEdges = (ctx, phase) => legalLabels(ctx.rider, phase).filter((l) => l.to !== "operator" && l.label !== "resume");
+/** The labels `overrule` would accept for an ended run; empty when there is no judge's call to overrule. */
+function overrulable(ctx, run) {
+  const stop = run?.transitions?.at(-1);
+  if (run?.endedBy !== "operator" || stop?.to !== "operator" || stop.by === "executor") return [];
+  return onwardEdges(ctx, run.phase).map((l) => l.label);
+}
 const sessionName = (run, phase) => `rider ${run.rider}/${run.runId} ${phase}`;
 
 /** A fresh run: intake (the one mechanical refusal before spend, §4.3), run.json, the start phase. */
@@ -35,15 +45,22 @@ export function enterPhase(ctx, run, phase, { dryRun = false } = {}) {
   run.visits[phase] = (run.visits[phase] ?? 0) + 1;
   if (run.visits[phase] > ctx.rider.limits.visits) {
     const because = `visit cap: ${phase} entered ${run.visits[phase]} times (limits.visits is ${ctx.rider.limits.visits})`;
-    run.transitions.push({ at, from: phase, label: "operator", to: "operator", because });
+    // `by: "executor"`: nobody judged this stop, so there is no call for `overrule` to overrule.
+    run.transitions.push({ at, from: phase, label: "operator", to: "operator", because, by: "executor" });
     if (!dryRun) ctx.endRun(run, { endedBy: "operator", reason: because });
     return { ok: true, state: "operator", runId: run.runId, reason: because, totalCost: totalCost(run) };
   }
   if (def.kind === "human") {
     if (dryRun) return { ok: true, state: "dry-run", phase, human: true, check: def.check };
+    // What the sessions handed over: the commits the work branch gains past this tip are the human
+    // phase's own, and `check` records them when the phase's check passes (the gate-precision record).
+    // A run recorded before `workTip` existed (or revived by `overrule`) has a branch and no tip: read it now.
+    if (!run.workTip && run.workBranch) { const tip = ctx.tip(`refs/heads/${run.workBranch}`); if (tip) run.workTip = tip; }
+    run.handoff = { phase, at, tip: run.workTip ?? null };
     ctx.saveRun(run);
     const show = def.show ? sh(def.show, ctx.shellOpts(run)).output : null;
-    return { ok: true, state: "human", runId: run.runId, phase, check: def.check, show, totalCost: totalCost(run) };
+    // No `checkExit`: the check has not run yet, and `rider check` is what runs it.
+    return { ok: true, state: "human", rider: run.rider, runId: run.runId, phase, check: def.check, show, notes: run.notes, totalCost: totalCost(run) };
   }
   const prompt = readFileSync(def.prompt, "utf8");
   const model = ctx.local.models?.[phase] ?? def.model;
@@ -54,7 +71,7 @@ export function enterPhase(ctx, run, phase, { dryRun = false } = {}) {
     ids = ctx.binding.launch(prompt, { model, name, cwd: ctx.root });
   } catch (e) {
     const because = `launch failed: ${e.message}`;
-    run.transitions.push({ at, from: phase, label: "operator", to: "operator", because });
+    run.transitions.push({ at, from: phase, label: "operator", to: "operator", because, by: "executor" });
     ctx.endRun(run, { endedBy: "operator", reason: because });
     return refuse(because);
   }
@@ -83,9 +100,35 @@ export function next(ctx, label, { because = null, dryRun = false } = {}) {
   if (to === "operator") {
     const reason = because ?? `${label} from ${run.phase}`;
     ctx.endRun(run, { endedBy: "operator", reason });
-    return { ok: true, state: "operator", runId: run.runId, reason, totalCost: totalCost(run) };
+    return { ok: true, state: "operator", runId: run.runId, reason, overrule: overrulable(ctx, run), totalCost: totalCost(run) };
   }
   return enterPhase(ctx, run, to, { dryRun });
+}
+
+/** The operator's ruling on a stop the judge routed to `operator`: revive that run and take a declared
+ *  edge of the phase it stopped at. Without it an `operator` stop is a dead end — `next` needs an active
+ *  run, and `start` cannot enter a human phase — so a ruling of "the phase's outcome stands" had no verb
+ *  to carry it. The judge's stop stays in `transitions` and the ruling lands beside it as
+ *  `by: "operator"`: the pair is one judge call and its review, which is what the record is read for. */
+export function overrule(ctx, label, { because = null, dryRun = false } = {}) {
+  const active = ctx.loadRun();
+  if (active) return refuse(`run ${active.runId} is active at phase ${active.phase} — overrule revives a run that stopped at operator`);
+  const run = ctx.lastEndedRun();
+  if (!run) return refuse("no ended run — nothing to overrule");
+  const stop = run.transitions.at(-1);
+  if (run.endedBy !== "operator" || stop?.to !== "operator") return refuse(`the last run (${run.runId}) ended by ${run.endedBy}, not at operator — nothing to overrule`);
+  if (stop.by === "executor") return refuse(`run ${run.runId} was stopped by the executor, not by a judge's call (${stop.because}) — nothing to overrule; rider start [phase]`);
+  const onward = onwardEdges(ctx, run.phase);
+  const legal = onward.map((l) => l.label).join(" · ") || "none";
+  if (!label) return refuse(`overrule needs a label — edges of ${run.phase}: ${legal}`);
+  const to = onward.find((l) => l.label === label)?.to ?? null;
+  if (!to) return refuse(`"${label}" is not an edge of ${run.phase} that leaves for another phase — legal: ${legal}`);
+  if (!because?.trim()) return refuse("overrule needs --because: the operator's ruling, in their words, is the record");
+  if (dryRun) return enterPhase(ctx, run, to, { dryRun: true });
+  // The ruling first, then the revival that writes it: no run.json ever exists for this run without it.
+  run.transitions.push({ at: ctx.now().toISOString(), from: run.phase, label, to, because: because.trim(), by: "operator" });
+  ctx.reviveRun(run);
+  return enterPhase(ctx, run, to);
 }
 
 /** The reflexive edge: re-enter the current session with the nudge (§2.2 `resume`). */
@@ -124,13 +167,13 @@ export function status(ctx) {
   const lastEvent = ctx.readEvents().at(-1) ?? null;
   if (!run) {
     const last = ctx.lastEndedRun();
-    return { ok: true, state: "none", rider: ctx.rider.name, watcher, lastEvent, lastRun: last && { runId: last.runId, phase: last.phase, endedBy: last.endedBy, reason: last.reason, endedAt: last.endedAt, totalCost: totalCost(last) } };
+    return { ok: true, state: "none", rider: ctx.rider.name, watcher, lastEvent, lastRun: last && { runId: last.runId, phase: last.phase, endedBy: last.endedBy, reason: last.reason, endedAt: last.endedAt, overrule: overrulable(ctx, last), totalCost: totalCost(last) } };
   }
   const def = ctx.rider.phases[run.phase];
   const sess = currentSession(run);
   const state = def.kind === "human" ? "human" : !sess ? "none" : sess.outcome === "running" ? "running" : sess.outcome === "waiting" ? "waiting" : "finished";
   return {
-    ok: true, state, rider: run.rider, runId: run.runId, phase: run.phase, visits: run.visits, branch: run.branch, baseBranch: baseOf(run), workBranch: run.workBranch ?? null, startedAt: run.startedAt, watcher, lastEvent,
+    ok: true, state, rider: run.rider, runId: run.runId, phase: run.phase, visits: run.visits, branch: run.branch, baseBranch: baseOf(run), workBranch: run.workBranch ?? null, workTip: run.workTip ?? null, startedAt: run.startedAt, watcher, lastEvent,
     totalCost: totalCost(run),
     sessions: run.sessions.map((s) => ({ phase: s.phase, model: s.model, shortId: s.shortId, id: s.id, outcome: s.outcome, cost: s.cost ?? null, turns: s.turns ?? null, at: s.at, resumedFrom: s.resumedFrom ?? null })),
     transitions: run.transitions, notes: run.notes,
@@ -138,13 +181,17 @@ export function status(ctx) {
   };
 }
 
+/** A note lands on the active run, or on the last ended one: what the operator found at the gate is
+ *  usually said after the merge, and the merge is what ended the run. */
 export function note(ctx, text) {
-  const run = ctx.loadRun();
-  if (!run) return refuse("no active run — nothing to note on");
   if (!text?.trim()) return refuse("note needs text");
-  run.notes.push({ at: ctx.now().toISOString(), text: text.trim() });
-  ctx.saveRun(run);
-  return { ok: true, state: "noted", runId: run.runId, notes: run.notes.length };
+  const active = ctx.loadRun();
+  const run = active ?? ctx.lastEndedRun();
+  if (!run) return refuse("no run, active or ended — nothing to note on");
+  (run.notes ??= []).push({ at: ctx.now().toISOString(), text: text.trim(), ...(active ? {} : { afterEnd: true }) });
+  if (active) ctx.saveRun(run);
+  else ctx.saveEndedRun(run);
+  return { ok: true, state: "noted", runId: run.runId, notes: run.notes.length, ended: !active };
 }
 
 /** Forget the active run (its record is kept under runs/); the project's own state is the truth. */

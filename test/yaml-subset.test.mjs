@@ -12,7 +12,7 @@ test("the worked example (§2.4) parses verbatim", () => {
   assert.deepEqual(data.phases.build.edges, { "code green": "close", blocked: "operator" });
   assert.deepEqual(data.phases.merge, {
     human: true,
-    check: "git merge-base --is-ancestor HEAD main",
+    check: "test -n \"$RIDER_WORK_TIP\" && git merge-base --is-ancestor \"$RIDER_WORK_TIP\" main",
     show: "git diff --stat main...HEAD -- Lemmaria-design-doc/tests/",
   });
   assert.deepEqual(data.intake, [

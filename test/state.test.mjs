@@ -28,7 +28,7 @@ test("a run is created, saved, ended into runs/, and found again as the last end
   assert.deepEqual(readEvents(paths), [line]);
   const log = writeLog(paths, "x.json", { a: 1 });
   assert.ok(existsSync(log));
-  assert.deepEqual(loadLocal(paths), { maxWaitHours: 6, pollSeconds: 30, models: {}, advisor: null, claudePath: null, shell: null, permissionMode: "auto" });
+  assert.deepEqual(loadLocal(paths), { maxWaitHours: 6, pollSeconds: 30, models: {}, advisor: null, launchArgs: [], claudePath: null, shell: null, permissionMode: "auto" });
   rmSync(root, { recursive: true, force: true });
 });
 
@@ -45,15 +45,15 @@ test("a run records base and work branch, and an old run still reads", () => {
   assert.equal(baseOf({}), null);
   assert.equal(baseOf(null), null);
 
-  assert.deepEqual(riderEnv({ name: "lemmaria" }, { runId: "c84c", phase: "build", baseBranch: "main", workBranch: "feature/r4-grounding" }), {
+  assert.deepEqual(riderEnv({ name: "lemmaria" }, { runId: "c84c", phase: "build", baseBranch: "main", workBranch: "feature/r4-grounding", workTip: "0f1e2d3c" }), {
     RIDER_NAME: "lemmaria", RIDER_RUN_ID: "c84c", RIDER_PHASE: "build",
-    RIDER_BASE_BRANCH: "main", RIDER_WORK_BRANCH: "feature/r4-grounding",
+    RIDER_BASE_BRANCH: "main", RIDER_WORK_BRANCH: "feature/r4-grounding", RIDER_WORK_TIP: "0f1e2d3c",
   });
 
   // An old-shape run (only `branch`) still yields a base, and an absent work branch is "".
   assert.deepEqual(riderEnv({ name: "lemmaria" }, { runId: "c84c", phase: "merge", branch: "main" }), {
     RIDER_NAME: "lemmaria", RIDER_RUN_ID: "c84c", RIDER_PHASE: "merge",
-    RIDER_BASE_BRANCH: "main", RIDER_WORK_BRANCH: "",
+    RIDER_BASE_BRANCH: "main", RIDER_WORK_BRANCH: "", RIDER_WORK_TIP: "",
   });
 
   // No run at all (intake, before newRun) must not throw.

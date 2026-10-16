@@ -63,7 +63,19 @@ test("synthetic entries never become the final reply but still reach the signal"
   assert.match(h.signal, /API Error: 529/);
   assert.equal(h.turns, 2);
   assert.equal(readTranscript(SYNTH).lastText, null);
-  assert.deepEqual(readTranscript(""), { lastText: null, lastAt: null, cost: null, costEntries: 0, question: null, turns: 0, userTurns: 0, userTurnDetails: [], signal: "", tail: [] });
+  assert.deepEqual(readTranscript(""), { lastText: null, lastAt: null, cost: null, costEntries: 0, question: null, turns: 0, userTurns: 0, userTurnDetails: [], signal: "", tail: [], harness: null });
+});
+
+test("harness: what the session ran under is read off the transcript, last value seen", () => {
+  // The shapes are 2.1.277's: the three keys sit on every assistant line, the output style arrives as
+  // an attachment. None of them is anything the rider passed — they are the operator's ambient setup.
+  const AH = (text, extra) => JSON.stringify({ type: "assistant", version: "2.1.277", effort: "high", advisorModel: "claude-opus-5", ...extra, message: { content: [{ type: "text", text }] } });
+  const STYLE = (style) => JSON.stringify({ type: "attachment", attachment: { type: "output_style", style } });
+  const h = readTranscript([U("p"), STYLE("Learning"), AH("a"), AH("b", { effort: "xhigh" }), SYNTH].join("\n"));
+  assert.deepEqual(h.harness, { version: "2.1.277", effort: "xhigh", advisorModel: "claude-opus-5", outputStyle: "Learning" });
+  // A key the transcript never states stays null rather than being guessed; none at all is null, not an object of nulls.
+  assert.deepEqual(readTranscript([U("p"), AH("a", { advisorModel: null })].join("\n")).harness, { version: "2.1.277", effort: "high", advisorModel: null, outputStyle: null });
+  assert.equal(readTranscript([U("p"), A("an old transcript")].join("\n")).harness, null);
 });
 
 test("lastAt is the entry timestamp of the last real assistant text", () => {

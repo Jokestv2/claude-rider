@@ -12,14 +12,24 @@ export function render(verb, r) {
     case "none": return renderNone(r);
     case "human": return renderHuman(r);
     case "dry-run": return r.argv ? `[dry-run] ${r.phase} (${r.model}): ${r.argv.map((a) => (/\s/.test(a) ? JSON.stringify(a.length > 60 ? `${a.slice(0, 57)}…` : a) : a)).join(" ")}` : `[dry-run] ${r.phase ?? r.to}`;
-    case "operator": return `run ${r.runId} stopped at operator: ${r.reason}\ntotal cost: ${fmtCost(r.totalCost ?? 0)}\nthe operator directs what happens next (rider start [phase] when ready)`;
-    case "noted": return `noted (${r.notes} notes on run ${r.runId})`;
+    case "operator": return [`run ${r.runId} stopped at operator: ${r.reason}`, `total cost: ${fmtCost(r.totalCost ?? 0)}`, "the operator directs what happens next:", ...operatorMoves(r.overrule)].join("\n");
+    case "noted": return `noted (${r.notes} notes on ${r.ended ? "ended " : ""}run ${r.runId})`;
     case "event": return r.events.length ? r.events.join("\n") : `no new event: ${r.reason}`;
     case "timeout": return `no event in ${r.minutes} min; the phase is still running — re-arm rider await`;
     default: break;
   }
-  if (verb === "start" || verb === "next" || verb === "resume") return `${r.phase} started as ${r.model}: ${r.session.shortId}  (${r.attach})${r.resumed ? `  resumed ${r.resumed}` : ""}\nvisit ${r.visit ?? "?"} of run ${r.runId}`;
+  if (verb === "start" || verb === "next" || verb === "resume" || verb === "overrule") return `${r.phase} started as ${r.model}: ${r.session.shortId}  (${r.attach})${r.resumed ? `  resumed ${r.resumed}` : ""}\nvisit ${r.visit ?? "?"} of run ${r.runId}`;
   return renderCheck(r);
+}
+
+/** Everything the operator can do after an `operator` stop, spelled as commands that exist: a judge
+ *  left to describe the way out invents one (842b's told the operator to `rider start merge`, which the
+ *  executor refuses). `labels` is what `overrule` would accept — empty when the executor made the stop. */
+function operatorMoves(labels) {
+  const L = [];
+  if (labels?.length) L.push(`  rider overrule "<label>" --because "…"   the phase's outcome stands after all: revive this run and take that edge (${labels.join(" · ")})`);
+  L.push("  rider start [phase]                       a fresh run, once what stopped this one is dealt with");
+  return L;
 }
 
 // `none` is not only "nothing here": reset and check both return it carrying a message of their own
@@ -34,7 +44,9 @@ function renderNone(r) {
 }
 
 function renderHuman(r) {
-  const L = [`rider ${r.rider}/${r.runId} · phase ${r.phase} is yours`, `check: ${r.check}   (exit ${r.checkExit ?? "?"} — the run ends when it exits 0)`];
+  // Entering the phase does not run its check; only `rider check` does, and only then is there an exit code.
+  const ran = r.checkExit != null ? `exit ${r.checkExit}` : "not run yet: rider check runs it";
+  const L = [`rider ${r.rider}/${r.runId} · phase ${r.phase} is yours`, `check: ${r.check}   (${ran} — the run ends when it exits 0)`];
   if (r.checkOutput) L.push(`  ${r.checkOutput.split("\n").join("\n  ")}`);
   if (r.show) L.push(RULE("show"), ...r.show.split("\n").map((l) => `  ${l}`));
   if (r.notes?.length) L.push(RULE("notes"), ...r.notes.map((n) => `  ${n.at}  ${n.text}`));
@@ -46,7 +58,8 @@ function renderStatus(r) {
   if (r.state === "none") {
     const L = [`rider ${r.rider} · no active run`];
     if (r.lastRun) L.push(`last run ${r.lastRun.runId} ended at ${r.lastRun.endedBy} (phase ${r.lastRun.phase}): ${r.lastRun.reason ?? ""}   cost ${fmtCost(r.lastRun.totalCost)}`);
-    L.push("next: rider start [phase]");
+    if (r.lastRun?.endedBy === "operator") L.push("next, on the operator's word:", ...operatorMoves(r.lastRun.overrule));
+    else L.push("next: rider start [phase]");
     return L.join("\n");
   }
   const base = baseOf(r) ?? "?";
@@ -69,6 +82,11 @@ export function renderCheck(r) {
   const resumes = r.resumes ? `${r.resumes}${r.lastResume ? ` (${r.lastResume.reason}, ${r.lastResume.at})` : ""}` : "0";
   L.push(`resumes: ${resumes}   human turns after launch: ${r.humanTurns}   cost this stretch: ${fmtCost(r.cost)}   turns: ${r.turns ?? "?"}${r.elapsedMs != null ? `   elapsed: ${fmtDuration(r.elapsedMs)}` : ""}`);
   if (r.rateLimit) L.push(`rate limit: reset ${r.rateLimit.resetAt ?? "unknown"} (seen ${r.rateLimit.at})`);
+  // The keys are the binding's; printed as found, so nothing harness-shaped is spelled here. Beyond the
+  // model these are the operator's ambient settings, which is how an output style meant for a person
+  // ends up in a session nobody reads.
+  const ran = Object.entries(r.harness ?? {}).filter(([, v]) => v != null).map(([k, v]) => `${k} ${v}`);
+  if (ran.length) L.push(`ran under: ${ran.join(" · ")}`);
   if (r.state === "running") return L.join("\n");
   // Before the final message on purpose: whether the judge may judge that text at all depends on
   // who these turns came from, so it has to read them first.

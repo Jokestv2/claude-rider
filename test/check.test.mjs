@@ -6,9 +6,9 @@ import { join } from "node:path";
 import { RESUME_NUDGE } from "../scripts/bindings/claude-code.mjs";
 import { check } from "../scripts/lib/check.mjs";
 import { renderCheck } from "../scripts/lib/render.mjs";
-import { resume, start } from "../scripts/lib/verbs.mjs";
+import { next, resume, start } from "../scripts/lib/verbs.mjs";
 import { FakeBinding } from "./fake-binding.mjs";
-import { FakeClock, makeCtx, tmpProject } from "./helpers.mjs";
+import { FakeClock, makeCtx, settled, tmpProject } from "./helpers.mjs";
 
 const GREEN = "Plan is committed.\nSTATUS: planned\n<promise>MILESTONE PLANNED</promise>";
 function setup(script, extra = {}) {
@@ -59,7 +59,7 @@ test("idle before the first new turn is still running; after ten minutes it is d
   const { ctx, clock, p } = setup([{ statuses: ["done"], read: { turns: 0, lastText: null } }]);
   assert.equal(check(ctx).state, "running");
   clock.t += 11 * 60_000;
-  assert.equal(check(ctx).state, "done");
+  assert.equal(settled(check, ctx).state, "done");
   p.cleanup();
 });
 
@@ -108,7 +108,9 @@ test("waiting carries the question; a STATUS line with no question is done", () 
   const b = setup([{ statuses: ["waiting"], read: { question: null, lastText: "STATUS: planned\nShall I continue?" } }]);
   const r2 = check(b.ctx);
   assert.equal(r2.state, "done");
-  assert.match(r2.doneReason, /asked in prose/);
+  // Only what was observed: whether the message asks for anything is the judge's reading, not check's.
+  assert.match(r2.doneReason, /registry reports the session waiting for input; no AskUserQuestion is pending/);
+  assert.doesNotMatch(r2.doneReason, /asked/);
   b.p.cleanup();
 });
 
@@ -133,12 +135,12 @@ test("a resumed stretch does not sign off on the previous stretch's text", () =>
 
 test("no STATUS line: a rate limit (with its reset) vs an API error", () => {
   const a = setup([{ statuses: ["done"], read: { lastText: null, signal: "You've hit your session limit - resets 1:40am (UTC)" } }]);
-  const r = check(a.ctx);
+  const r = settled(check, a.ctx);
   assert.equal(r.state, "rate-limited");
   assert.equal(r.rateLimit.resetAt, "2026-09-04T01:40:00.000Z");
   a.p.cleanup();
   const b = setup([{ statuses: ["done"], read: { lastText: null, signal: "API Error: 529 overloaded" } }]);
-  const r2 = check(b.ctx);
+  const r2 = settled(check, b.ctx);
   assert.equal(r2.state, "done");
   assert.match(r2.doneReason, /API error \(HTTP 529\)/);
   assert.equal(r2.statusHint, null);
@@ -157,7 +159,7 @@ test("a STATUS line wins: the rate-limit classifier is consulted only when there
 test("the reset is anchored at the transcript's last turn, not at check time", () => {
   // the judge was down for hours: a reset that has already passed must not parse as tomorrow
   const { ctx, p } = setup([{ statuses: ["done"], read: { lastText: null, signal: "You've hit your session limit - resets 1:40am (UTC)", lastAt: "2026-09-03T01:00:00.000Z" } }]);
-  const r = check(ctx);
+  const r = settled(check, ctx);
   assert.equal(r.state, "rate-limited");
   assert.equal(r.rateLimit.resetAt, "2026-09-03T01:40:00.000Z");
   p.cleanup();
@@ -203,7 +205,8 @@ test("after a resume the nudge is dropped by identity, not by position", () => {
   try {
     start(ctx);
     // The operator typed in this stretch, so it reads intervened over its rate-limited outcome.
-    assert.deepEqual([check(ctx).state, check(ctx).outcome], ["intervened", "rate-limited"]);
+    const first = settled(check, ctx);
+    assert.deepEqual([first.state, first.outcome], ["intervened", "rate-limited"]);
     resume(ctx, { reason: "rate-limit" });
     const r = check(ctx);
     assert.equal(r.resumes, 1);
@@ -281,5 +284,114 @@ test("the stopped path records workBranch too: a phase already done at its first
     head = "feature/r4-grounding"; // the phase created the branch and finished before the first check
     assert.equal(check(ctx).state, "done", "the first check must classify as stopped, not running");
     assert.equal(ctx.loadRun().workBranch, "feature/r4-grounding");
+  } finally { p.cleanup(); }
+});
+
+// Run 7cb5, close phase: the session ended its turn to wait for its `tests/p1` subagent, as the system-prompt
+// append says is safe. The watcher's poll landed in the two seconds between the subagent's completion being
+// queued and the harness waking the session; the registry entry read `status: idle, state: working`, check
+// called it `done`, and the live session was stopped mid-hand-back.
+test("7cb5: one idle sample between a subagent finishing and the session waking does not stop it", () => {
+  const { ctx, binding, p } = setup([{ statuses: [{ kind: "done", entry: { status: "idle", state: "working" } }, "running", "done"], read: { turns: 40, lastText: "Dispatched the tests/p1 subagent; ending my turn until it reports." } }]);
+  const orig = binding.read.bind(binding);
+  const later = [{}, { turns: 46, lastText: "The subagent is back; verifying its fixtures." }, { turns: 60, lastText: GREEN }];
+  let at = 0;
+  binding.read = (ids) => ({ ...orig(ids), ...later[at] });
+  try {
+    const first = check(ctx);
+    assert.equal(first.state, "running");
+    assert.match(first.note, /idle with no STATUS line/);
+    assert.equal(binding.calls.some((c) => c.call === "stop"), false, "a live session is not stopped on one sample");
+    at = 1;
+    assert.equal(check(ctx).state, "running");
+    assert.equal(ctx.loadRun().sessions[0].bareDone, null, "the sighting is forgotten once the session is seen working again");
+    at = 2;
+    const r = check(ctx);
+    assert.deepEqual([r.state, r.statusHint], ["done", "STATUS: planned"]);
+    assert.equal(binding.calls.filter((c) => c.call === "stop").length, 1);
+  } finally { p.cleanup(); }
+});
+
+test("a bare done that stays put is believed, stopped exactly once, and says why it has no hint", () => {
+  const { ctx, binding, p } = setup([{ statuses: [{ kind: "done", entry: { status: "idle", state: "done" } }], read: { turns: 9, lastText: "I had a think." } }]);
+  try {
+    // The registry calling it `state: done` buys no shortcut: the second look is what confirms it.
+    const first = check(ctx);
+    assert.deepEqual([first.state, first.note], ["running", "idle with no STATUS line; confirming on the next check"]);
+    assert.equal(binding.calls.some((c) => c.call === "stop"), false);
+    const r = check(ctx);
+    assert.equal(r.state, "done");
+    assert.match(r.doneReason, /no STATUS line/);
+    assert.equal(binding.calls.filter((c) => c.call === "stop").length, 1);
+    assert.equal(check(ctx).state, "done", "and it stays believed: the stored block, no second stop");
+    assert.equal(binding.calls.filter((c) => c.call === "stop").length, 1);
+  } finally { p.cleanup(); }
+});
+
+test("a confirming look starts over when the transcript moved in between", () => {
+  // Two bare-done samples are only corroboration if nothing happened between them. The count is kept by
+  // check itself, whatever the policy then makes of it.
+  const { ctx, binding, p } = setup([{ statuses: ["done"], read: { turns: 9, lastText: "thinking" } }]);
+  const orig = binding.read.bind(binding);
+  let turns = 9;
+  binding.read = (ids) => ({ ...orig(ids), turns });
+  try {
+    const run = ctx.loadRun();
+    run.sessions[0].bareDone = { turns: 9, sightings: 1 }; // what a first, unconfirmed sighting leaves behind
+    ctx.saveRun(run);
+    turns = 12;
+    assert.equal(check(ctx).state, "running", "the second look in a row, but not over the same transcript");
+    assert.deepEqual(ctx.loadRun().sessions[0].bareDone, { turns: 12, sightings: 1 }, "a moved transcript is a first sighting again");
+    assert.equal(check(ctx).state, "done");
+  } finally { p.cleanup(); }
+});
+
+test("what a session ran under is recorded at its stop and shown in the block", () => {
+  const harness = { version: "2.1.277", effort: "xhigh", advisorModel: "claude-opus-5", outputStyle: "Learning" };
+  const { ctx, p } = setup([{ statuses: ["done"], read: { lastText: GREEN, turns: 5, harness } }]);
+  try {
+    const r = check(ctx);
+    assert.deepEqual(r.harness, harness);
+    assert.deepEqual(ctx.loadRun().sessions[0].harness, harness, "on the run record: runs/*.json is what gets compared across runs");
+    assert.match(renderCheck(r), /\nran under: version 2\.1\.277 · effort xhigh · advisorModel claude-opus-5 · outputStyle Learning\n/);
+    // A binding that reports nothing prints nothing: the line is the binding's facts, not a template.
+    assert.doesNotMatch(renderCheck({ ...r, harness: null }), /ran under/);
+  } finally { p.cleanup(); }
+});
+
+test("the work tip travels with the work branch, follows it at the human phase, and outlives it", () => {
+  let head = "main";
+  const tips = { HEAD: "aaa1", "refs/heads/feature/v1": "aaa1" };
+  const asked = [];
+  const p = tmpProject();
+  const binding = new FakeBinding({ script: [{ statuses: ["done"], read: { lastText: "STATUS: gate green\n<promise>X</promise>", turns: 5 } }] });
+  const ctx = makeCtx({ root: p.root, binding });
+  ctx.branch = () => head;
+  ctx.tip = (ref) => tips[ref] ?? null;
+  ctx.commitsBetween = (from, to) => { asked.push([from, to]); return ["bbb2 fix: found while driving scenario 3"]; };
+  try {
+    start(ctx, { phase: "close" });
+    head = "feature/v1";
+    check(ctx);
+    assert.equal(ctx.loadRun().workTip, "aaa1");
+    assert.equal(ctx.shellOpts(ctx.loadRun()).env.RIDER_WORK_TIP, "aaa1");
+
+    next(ctx, "gate green", { because: "gate record closed" });
+    assert.deepEqual(ctx.loadRun().handoff, { phase: "merge", at: ctx.loadRun().handoff.at, tip: "aaa1" });
+
+    // The operator fixes something on the branch during gate review: the tip to merge moves with it.
+    tips["refs/heads/feature/v1"] = "bbb2";
+    head = "main";
+    assert.equal(check(ctx).state, "human");
+    assert.equal(ctx.loadRun().workTip, "bbb2");
+
+    // Merged, and the branch deleted: a check by name would exit 128 for ever; the last sighting stands.
+    delete tips["refs/heads/feature/v1"];
+    writeFileSync(join(p.root, "merged.flag"), "");
+    assert.equal(check(ctx).state, "none");
+    const ended = ctx.lastEndedRun();
+    assert.equal(ended.workTip, "bbb2");
+    assert.deepEqual(asked, [["aaa1", "main"]], "read from the base once the branch is gone");
+    assert.deepEqual(ended.handoff.after, { ref: "main", commits: ["bbb2 fix: found while driving scenario 3"] });
   } finally { p.cleanup(); }
 });

@@ -17,14 +17,15 @@ const USAGE = `rider — drive riders/<name>/RIDER.md one phase at a time (run f
   rider next <label> --because "…"    take an edge of the current phase; also: resume · operator
   rider check                         classify the current session; print the block the judge reads
   rider resume                        re-enter the current session after a rate limit or a kill
+  rider overrule <label> --because "…"  the operator's ruling: revive the run that stopped at operator, take the edge
   rider await [--max-minutes N]       block until the watcher's next event (exit 0) or N min (exit 3)
   rider status                        the run at a glance
-  rider note "…"                      append to the run record
+  rider note "…"                      append to the run record (the last ended run when none is active)
   rider reset                         forget the active run (its record stays under .rider/<name>/runs/)
   rider watch                         the detached watcher itself (spawned by start/next/resume/check)
 
   --rider <directory name>   when the project has several riders   --json   machine-readable output
-  --dry-run        start/next/resume print the harness command and run nothing
+  --dry-run        start/next/resume/overrule print the harness command and run nothing
   --max-minutes N  await's deadline in minutes (default 60)  --binding <path>  another harness module (or RIDER_BINDING)
 exit: 0 ok · 2 refused or usage · 3 await timed out`;
 
@@ -72,7 +73,7 @@ export async function main(argv = process.argv.slice(2), { cwd = process.cwd(), 
     const bindingPath = cli.flags.binding ?? process.env.RIDER_BINDING ?? null;
     const bindingUrl = bindingPath ? pathToFileURL(bindingPath).href : new URL("./bindings/claude-code.mjs", import.meta.url).href;
     const { createBinding } = await import(bindingUrl);
-    const binding = createBinding({ claudePath: local.claudePath, advisor: local.advisor, permissionMode: local.permissionMode });
+    const binding = createBinding({ claudePath: local.claudePath, advisor: local.advisor, launchArgs: local.launchArgs, permissionMode: local.permissionMode });
     // RIDER_NO_WATCHER=1: tests drive verbs from one process and must not get a real detached watcher
     // racing them over the same state files; the smoke tier keeps the real one on purpose.
     const ctx = createContext({ rider, root: cwd, paths, local, binding, ...(process.env.RIDER_NO_WATCHER ? { spawnWatcher: () => false } : {}) });
@@ -84,6 +85,7 @@ export async function main(argv = process.argv.slice(2), { cwd = process.cwd(), 
       case "next": r = verbs.next(ctx, cli.args[0], { because: cli.flags.because ?? null, dryRun }); break;
       case "check": r = check(ctx); break;
       case "resume": r = verbs.resume(ctx, { reason: cli.flags.because ?? "judge", dryRun }); break;
+      case "overrule": r = verbs.overrule(ctx, cli.args[0], { because: cli.flags.because ?? null, dryRun }); break;
       case "status": r = verbs.status(ctx); break;
       case "note": r = verbs.note(ctx, cli.args.join(" ")); break;
       case "reset": r = verbs.reset(ctx); break;

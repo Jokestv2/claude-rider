@@ -14,7 +14,7 @@ phases:
     edges: { gate green: merge, blocked: operator }
   merge:
     human: true
-    check: git merge-base --is-ancestor HEAD main
+    check: test -n "$RIDER_WORK_TIP" && git merge-base --is-ancestor "$RIDER_WORK_TIP" main
     show: git diff --stat main...HEAD -- Lemmaria-design-doc/tests/
 intake:
   - test -z "$(git status --porcelain)"
@@ -80,6 +80,15 @@ export class FakeClock {
   constructor(start = "2026-09-03T12:00:00Z") { this.t = new Date(start).getTime(); this.slept = []; }
   now = () => new Date(this.t);
   sleep = (ms) => { this.slept.push(ms); this.t += ms; };
+}
+
+/** `check` until the session is past running. A `done` with no STATUS line may take a confirming look
+ *  before it is acted on, and how many is policy (`bareDoneConfirmed`): a test about what the stop READS
+ *  as should not also pin how many polls it took to believe it. Takes `check` so this file stays import-light. */
+export function settled(check, ctx, max = 5) {
+  let r = check(ctx);
+  for (let i = 1; i < max && r.state === "running"; i++) r = check(ctx);
+  return r;
 }
 
 export function makeCtx({ root, name = "lemmaria", binding, clock = new FakeClock(), local = {}, spawnWatcher = () => false, watcherAlive = () => null, killWatcher = () => {} }) {

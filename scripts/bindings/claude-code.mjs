@@ -44,7 +44,10 @@ const TURN_DETAILS_MAX = 10;
 export function readTranscript(text) {
   // lastAt anchors the rate-limit reset: a reset parsed against `now` when the judge was down for
   // hours reads as tomorrow, and the watcher would then sleep about a day for a limit already lifted.
-  const out = { lastText: null, lastAt: null, cost: null, costEntries: 0, question: null, turns: 0, userTurns: 0, userTurnDetails: [], signal: "", tail: [] };
+  const out = { lastText: null, lastAt: null, cost: null, costEntries: 0, question: null, turns: 0, userTurns: 0, userTurnDetails: [], signal: "", tail: [], harness: null };
+  // What the session ran under, beyond what the rider passed: the last value seen of each, since effort
+  // and output style can change mid-session. A key stays null when the transcript never states it.
+  const harness = { version: null, effort: null, advisorModel: null, outputStyle: null };
   const signals = [];
   for (const line of String(text ?? "").split(/\r?\n/)) {
     if (!line.trim()) continue;
@@ -55,6 +58,7 @@ export function readTranscript(text) {
     if (d.type === "assistant") {
       out.turns++;
       const synthetic = d.isApiErrorMessage === true || d.message?.model === "<synthetic>";
+      if (!synthetic) for (const k of ["version", "effort", "advisorModel"]) if (typeof d[k] === "string") harness[k] = d[k];
       for (const b of content) {
         if (b.type === "text" && b.text) {
           if (!synthetic) { out.lastText = b.text; out.lastAt = typeof d.timestamp === "string" ? d.timestamp : null; }
@@ -98,11 +102,14 @@ export function readTranscript(text) {
       out.costEntries++;
     } else if (d.type === "system" && typeof d.content === "string") {
       signals.push(d.content);
+    } else if (d.type === "attachment" && d.attachment?.type === "output_style" && typeof d.attachment.style === "string") {
+      harness.outputStyle = d.attachment.style;
     }
     out.tail.push(line.length > 400 ? `${line.slice(0, 400)}…` : line);
   }
   out.tail = out.tail.slice(-30);
   out.signal = signals.slice(-10).join("\n");
+  if (Object.values(harness).some((v) => v !== null)) out.harness = harness;
   return out;
 }
 
@@ -190,7 +197,7 @@ export function defaultClaudePath() {
   return "claude";
 }
 
-export function createBinding({ claudePath = null, advisor = null, permissionMode = "auto", projectsDir = join(homedir(), ".claude", "projects"), exec = spawnSync, alive = isAlive, sleep = sleepSync } = {}) {
+export function createBinding({ claudePath = null, advisor = null, launchArgs = [], permissionMode = "auto", projectsDir = join(homedir(), ".claude", "projects"), exec = spawnSync, alive = isAlive, sleep = sleepSync } = {}) {
   const exe = claudePath || defaultClaudePath();
   const claude = (args, opts = {}) => exec(exe, args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 120_000, maxBuffer: 64 * 1024 * 1024, windowsHide: true, ...opts });
   const agents = () => {
@@ -199,7 +206,12 @@ export function createBinding({ claudePath = null, advisor = null, permissionMod
     if (r.error?.code === "ENOENT") throw new Error(`cannot run ${exe}: ${r.error.message} — set claudePath in .rider/<name>/local.json`);
     try { const v = JSON.parse(r.stdout ?? ""); return Array.isArray(v) ? v : []; } catch { return []; }
   };
-  const common = ({ model, name }) => ["--bg", "-n", name, "--model", model, "--permission-mode", permissionMode || "auto", "--append-system-prompt", SYSTEM_APPEND, ...(advisor ? ["--advisor", advisor] : [])];
+  // A phase session otherwise inherits the operator's interactive setup — effort, output style, advisor —
+  // and that setup drifts under the runs. `launchArgs` is how a project pins it (`--effort`, `--settings`).
+  // Placed before the rider's own flags: a variadic flag (`--mcp-config a b`) then ends at `-n` instead
+  // of swallowing the prompt. Validated here because a string would spread into single characters.
+  if (!Array.isArray(launchArgs) || launchArgs.some((a) => typeof a !== "string")) throw new Error("launchArgs in local.json must be a list of strings, one argv element each");
+  const common = ({ model, name }) => ["--bg", ...launchArgs, "-n", name, "--model", model, "--permission-mode", permissionMode || "auto", "--append-system-prompt", SYSTEM_APPEND, ...(advisor ? ["--advisor", advisor] : [])];
   const launchArgv = (prompt, o) => [...common(o), prompt];
   const resumeArgv = (sessionId, o) => (o.listed ? ["--bg", "--resume", sessionId, RESUME_NUDGE] : [...common(o), "--resume", sessionId, RESUME_NUDGE]);
   const spawnBg = (argv, cwd) => {

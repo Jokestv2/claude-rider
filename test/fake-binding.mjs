@@ -41,9 +41,10 @@ export class FakeBinding {
     if (!x) return { kind: "gone", entry: null, listed: false };
     const next = x.statuses.length > 1 ? x.statuses.shift() : x.statuses[0];
     this.#save();
-    // A scripted status is a kind string or { kind, listed }: the registry can still list a session whose process died.
-    const { kind, listed = kind !== "gone" } = typeof next === "string" ? { kind: next } : next;
-    return { kind, entry: listed ? { id: x.shortId, sessionId: x.sessionId, pid: kind === "gone" ? null : x.pid, name: x.name } : null, listed };
+    // A scripted status is a kind string or { kind, listed, entry }: the registry can still list a session whose
+    // process died, and `entry` adds the raw registry fields (`status`, `state`) a sample was taken with.
+    const { kind, listed = kind !== "gone", entry = {} } = typeof next === "string" ? { kind: next } : next;
+    return { kind, entry: listed ? { id: x.shortId, sessionId: x.sessionId, pid: kind === "gone" ? null : x.pid, name: x.name, ...entry } : null, listed };
   }
   read(ids) { this.#load(); const x = this.#find(ids); return x ? { ...x.read, transcript: `/fake/${x.sessionId}.jsonl` } : { ...EMPTY_READ }; }
   stop(ids) { this.#load(); this.s.calls.push({ call: "stop", shortId: ids.shortId }); const x = this.#find(ids); if (x) { x.read.costEntries += 1; x.pid = null; x.statuses = ["done"]; } this.#save(); }

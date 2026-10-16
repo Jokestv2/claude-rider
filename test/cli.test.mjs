@@ -64,6 +64,26 @@ test("start → check → next → … → human check through the CLI, --json a
   p.cleanup();
 });
 
+test("overrule through the CLI: the run the judge stopped is the run that reaches the human phase", () => {
+  const p = tmpProject();
+  const state = join(p.root, "fake-state.json");
+  writeFileSync(state, JSON.stringify({ scripts: [{ statuses: ["done"], read: { lastText: "STATUS: gate green\n<promise>X</promise>", turns: 5, cost: 3 } }] }));
+  const env = { ...process.env, RIDER_BINDING: FAKE, RIDER_FAKE_STATE: state, RIDER_NO_WATCHER: "1" };
+  const run = (...args) => { const r = spawnSync(process.execPath, [RIDER, ...args], { cwd: p.root, env, encoding: "utf8" }); return { code: r.status, out: r.stdout, err: r.stderr }; };
+  const json = (...args) => { const r = run(...args, "--json"); return { ...r, v: JSON.parse(r.out) }; };
+  const started = json("start", "close").v;
+  assert.equal(json("check").v.state, "done");
+  assert.equal(json("next", "operator", "--because", "asked for a ruling").v.state, "operator");
+  assert.equal(run("start", "merge").code, 2, "what 842b's judge told the operator to run: refused then, refused now");
+  assert.match(run("status").out, /rider overrule "<label>" --because "…"[^\n]*\(gate green\)/);
+  assert.equal(run("overrule", "gate green").code, 2);
+  const ruled = json("overrule", "gate green", "--because", "the in-place fix stands");
+  assert.deepEqual([ruled.code, ruled.v.state, ruled.v.phase, ruled.v.runId], [0, "human", "merge", started.runId]);
+  assert.deepEqual(json("status").v.transitions.map((t) => t.by ?? "judge"), ["judge", "operator"]);
+  assert.match(run("--help").out, /rider overrule <label> --because/);
+  p.cleanup();
+});
+
 test("no rider, several riders, --rider selection, and the failures before dispatch", () => {
   const p = tmpProject();
   const at = (cwd, ...args) => spawnSync(process.execPath, [RIDER, ...args], { cwd, encoding: "utf8", env: { ...process.env, RIDER_NO_WATCHER: "1" } });
