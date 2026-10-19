@@ -17,10 +17,12 @@ export function currentKey(run) {
   return sess ? keyOf(run, sess) : null;
 }
 
-/** The instance as a refused decision finds it: what the decider missed, in the terms its key was written in. */
-export function snapshot(state, rider) {
+/** The instance as a refused decision finds it: what the decider missed, in the terms its key was written in. With no
+ *  active run, `ended` is the last ended run's record, read in the same hold: `lastRun` keeps no transitions, and the move
+ *  that ended the run (a reset, an operator stop, and by whom) is most often exactly what the decider missed. */
+export function snapshot(state, rider, ended = null) {
   const run = state?.run;
-  if (!run) return { runId: null, phase: null, key: null, outcome: null, lastTransition: null, lastRun: state?.lastRun ?? null };
+  if (!run) return { runId: null, phase: null, key: null, outcome: null, lastTransition: ended?.transitions?.at(-1) ?? null, lastRun: state?.lastRun ?? null };
   const sess = currentSession(run);
   const human = rider.phases[run.phase]?.kind === "human";
   return { runId: run.runId, phase: run.phase, key: sess ? keyOf(run, sess) : null, outcome: sess?.outcome ?? (human ? "human" : null), lastTransition: run.transitions.at(-1) ?? null };
@@ -35,7 +37,7 @@ function transitionText(t) {
 export function nowLine(snap) {
   if (!snap.runId) {
     const l = snap.lastRun;
-    return l ? `no active run · last run ${l.runId} ended at ${l.endedBy} (phase ${l.phase})` : "no run yet";
+    return l ? `no active run · last run ${l.runId} ended at ${l.endedBy} (phase ${l.phase})${l.reason ? `: ${l.reason}` : ""} · last: ${transitionText(snap.lastTransition)}` : "no run yet";
   }
   return `phase ${snap.phase} · run ${snap.runId} · latest ${snap.key ?? "none"} (${snap.outcome ?? "no session"}) · last: ${transitionText(snap.lastTransition)}`;
 }

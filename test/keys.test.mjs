@@ -39,10 +39,33 @@ test("the stale decision of §8 is refused, names the new phase and the other ac
   assert.equal(late.current.key, `${r}.2`);
   const events = judge.readEvents();
   assert.equal(events.length, before + 1);
-  assert.deepEqual([events.at(-1).kind, events.at(-1).key, events.at(-1).text], ["refused", `${r}.1`, late.error]);
+  assert.deepEqual([events.at(-1).kind, events.at(-1).runId, events.at(-1).phase, events.at(-1).key, events.at(-1).text], ["refused", r, "build", `${r}.1`, late.error], "on the judged run's timeline, at the phase it reached");
   const run = judge.loadRun();
   assert.deepEqual([run.phase, run.transitions.length, run.sessions.length], ["build", 1, 2], "nothing moved");
   assert.equal(render("next", late), `refused: ${late.error}\nnow: phase build · run ${r} · latest ${r}.2 (done) · last: plan —planned→ build by operator: the plan stands`);
+});
+
+test("a decision on a run someone else ended is told who ended it and why, and is not sent to rider start", (t) => {
+  const p = tmpProject();
+  t.after(p.cleanup);
+  const binding = new FakeBinding({ script: [done("planned")] });
+  const judge = makeCtx({ root: p.root, binding });
+  const operator = makeCtx({ root: p.root, binding });
+  const { runId: r } = start(judge);
+  assert.equal(check(judge).key, `${r}.1`);
+  // The operator ends the run while the judge is still reading plan's block.
+  assert.equal(reset(operator, { on: r, by: "operator", because: "wrong milestone" }).ok, true);
+  const late = next(judge, "planned", { on: `${r}.1`, because: "plan committed" });
+  assert.deepEqual([late.ok, late.stale], [false, true]);
+  assert.match(late.error, /^[0-9a-f]{4}\.1 judged phase plan, but no run is active; /);
+  assert.match(late.error, /plan —reset→ reset by operator: wrong milestone/);
+  assert.doesNotMatch(late.error, /rider start/);
+  assert.deepEqual(late.current.lastTransition, { at: late.current.lastTransition.at, from: "plan", label: "reset", to: "reset", because: "wrong milestone", by: "operator" });
+  assert.equal(render("next", late).split("\n")[1], `now: no active run · last run ${r} ended at reset (phase plan): wrong milestone · last: plan —reset→ reset by operator: wrong milestone`);
+  const again = resume(judge, { on: `${r}.1` });
+  assert.match(again.error, /reset by operator: wrong milestone/);
+  assert.doesNotMatch(again.error, /rider start/);
+  assert.deepEqual(judge.readEvents().slice(-2).map((e) => [e.kind, e.runId, e.phase, e.key]), [["refused", r, null, `${r}.1`], ["refused", r, null, `${r}.1`]]);
 });
 
 test("resume, overrule and reset refuse a stale key", (t) => {
@@ -53,11 +76,14 @@ test("resume, overrule and reset refuse a stale key", (t) => {
   const refused = (res, key) => {
     assert.deepEqual([res.ok, res.stale], [false, true], res.error);
     const e = ctx.readEvents().at(-1);
-    assert.deepEqual([e.kind, e.key, e.text], ["refused", key, res.error]);
+    assert.deepEqual([e.kind, e.runId, e.key, e.text], ["refused", key.split(".")[0], key, res.error]);
   };
   const { runId: r } = start(ctx);
   check(ctx);
   next(ctx, "planned", { on: `${r}.1`, because: "ok" });
+  // A dry run is refused the same way and, running nothing, records nothing.
+  const quiet = ctx.readEvents().length;
+  assert.deepEqual([next(ctx, "blocked", { on: `${r}.1`, dryRun: true }).stale, ctx.readEvents().length], [true, quiet]);
   // resume: plan's stretch, once the run has gone on to build.
   refused(resume(ctx, { on: `${r}.1` }), `${r}.1`);
   assert.equal(binding.calls.filter((c) => c.call === "resume").length, 0, "a refused resume reaches no session");
@@ -196,7 +222,7 @@ test("the watcher's resume after the run moved on is refused quietly", (t) => {
   assert.equal(binding.calls.filter((c) => c.call === "resume").length, 0, "no resume reaches the binding");
   assert.ok(logs.includes("the run moved on while waiting; exiting"), logs.join("\n"));
   const last = watcher.readEvents().at(-1);
-  assert.deepEqual([last.kind, last.key], ["refused", `${r}.1`], "the watcher's refused resume is on file like any other");
+  assert.deepEqual([last.kind, last.runId, last.phase, last.key], ["refused", r, null, `${r}.1`], "the watcher's refused resume is on file like any other");
 });
 
 test("a reset between the watcher's check and its wait ends the watch quietly", (t) => {
@@ -243,5 +269,5 @@ test("through the CLI both refusals exit 2: a malformed key leaves no trace, a s
   const stale = run("next", "blocked", "--on", `${r}.1`, "--because", "late");
   assert.equal(stale.code, 2);
   assert.match(stale.out, new RegExp(`^refused: .*\\nnow: phase build · run ${r} · latest ${r}\\.2 \\(running\\) · last: plan —planned→ build by operator: ok\\n?$`));
-  assert.equal(json("status").v.lastEvent.kind, "refused");
+  assert.deepEqual([json("status").v.lastEvent.kind, json("status").v.lastEvent.runId], ["refused", r]);
 });

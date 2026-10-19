@@ -19,21 +19,27 @@ function keyRefusal(ctx, verb, on, { dryRun = false } = {}) {
     return refuse(on == null ? `${verb} needs --on ${shape}` : `--on "${on}" is not ${shape}`);
   }
   const state = ctx.readState();
-  const reason = stretch ? staleStretch(ctx, state.run, on, k) : verb === "overrule" ? staleEnded(state, on) : staleActive(state.run, on);
+  // Read in this hold, so it is the record `state.lastRun` names; only a refusal with no active run needs it.
+  const ended = state.run ? null : ctx.lastEndedRun();
+  const reason = stretch ? staleStretch(ctx, state.run, ended, on, k) : verb === "overrule" ? staleEnded(state, on) : staleActive(state.run, on);
   if (!reason) return null;
-  const current = snapshot(state, ctx.rider);
+  const current = snapshot(state, ctx.rider, ended);
   const error = `${reason}; now ${nowLine(current)}`;
-  if (!dryRun) ctx.event("refused", { runId: current.runId, phase: current.phase, key: on, text: error });
+  // On the timeline of the run it judged, at the phase the instance had reached.
+  if (!dryRun) ctx.event("refused", { runId: stretch ? k.runId : k, phase: current.phase, key: on, text: error });
   return { ok: false, stale: true, error, current };
 }
 
-/** Why a stretch key is not the current one, in the words the verb used before keys, where one applied. */
-function staleStretch(ctx, run, on, k) {
-  if (!run) return "no active run — rider start";
+/** Why a stretch key is not the current one, in the words the verb used before keys, where one applied. With no active
+ *  run it does not send the decider to `rider start`: someone ended the run it judged, and the refusal says who and why. */
+function staleStretch(ctx, run, ended, on, k) {
   const latest = currentKey(run);
-  if (latest === on) return null;
-  const phase = run.runId === k.runId ? run.sessions[k.n - 1]?.phase : null;
-  const judged = phase ? `${on} judged phase ${phase}` : `${on} is no stretch of run ${run.runId}`;
+  if (run && latest === on) return null;
+  const named = [run, ended].find((x) => x?.runId === k.runId);
+  const phase = named?.sessions[k.n - 1]?.phase;
+  const of = named ?? run ?? ended;
+  const judged = phase ? `${on} judged phase ${phase}` : `${on} is no stretch of ${of ? `run ${of.runId}` : "any run here"}`;
+  if (!run) return `${judged}, but no run is active`;
   return ctx.rider.phases[run.phase]?.kind === "human" ? `${judged}, but ${run.phase} is a human phase — rider check runs its check command` : `${judged}, but the latest stretch of ${run.phase} is ${latest ?? "none"}`;
 }
 
