@@ -48,6 +48,20 @@ test("a listed session is resumed BARE; an unlisted one gets its options again",
   assert.equal(r.sessionId, "full-id-1");
 });
 
+test("launch and an unlisted resume hand their facts to claude; a listed resume does not", () => {
+  const { exec, calls } = fakeExec({ launch: launchLine, agents: registry });
+  const b = createBinding({ claudePath: "claude-x", exec, sleep: () => {} });
+  const o = { model: "opus", name: "n", cwd: "/p", facts: ["FACT"] };
+  b.launch("PROMPT", o);
+  b.resume("full-id-1", { ...o, listed: false });
+  b.resume("full-id-1", { ...o, listed: true });
+  const [launched, relaunched, bare] = calls.filter((c) => c[1] === "--bg");
+  const appended = (argv) => argv[argv.indexOf("--append-system-prompt") + 1];
+  assert.equal(appended(launched), `${SYSTEM_APPEND} FACT`);
+  assert.equal(appended(relaunched), `${SYSTEM_APPEND} FACT`);
+  assert.deepEqual(bare, ["claude-x", "--bg", "--resume", "full-id-1", RESUME_NUDGE]);
+});
+
 test("a spawn error names the binary instead of a null exit", () => {
   const enoent = () => ({ status: null, stdout: undefined, stderr: undefined, error: Object.assign(new Error("spawn claude-x ENOENT"), { code: "ENOENT" }) });
   const b = createBinding({ claudePath: "claude-x", exec: enoent, sleep: () => {} });

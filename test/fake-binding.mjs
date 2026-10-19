@@ -8,8 +8,8 @@ export class FakeBinding {
   name = "fake";
   heuristics = { classifyNoMarker, parseResetTime };
   dryRun = {
-    launchArgv: (prompt, o) => ["fake", "--model", o.model, "-n", o.name, prompt.slice(0, 20)],
-    resumeArgv: (id, o) => ["fake", "--resume", id, o.listed ? "bare" : "with-options"],
+    launchArgv: (prompt, o) => ["fake", "--model", o.model, "-n", o.name, prompt.slice(0, 20), ...(o.facts ?? [])],
+    resumeArgv: (id, o) => ["fake", "--resume", id, o.listed ? "bare" : "with-options", ...(o.facts ?? [])],
   };
   constructor({ script = [], stateFile = null } = {}) {
     this.stateFile = stateFile;
@@ -33,8 +33,9 @@ export class FakeBinding {
     this.#save();
     return { shortId: sess.shortId, sessionId: id, name };
   }
-  launch(prompt, o) { this.#load(); this.s.calls.push({ call: "launch", prompt, model: o.model, name: o.name, cwd: o.cwd }); return this.#open(this.#take(), null, o.name); }
-  resume(sessionId, o) { this.#load(); this.s.calls.push({ call: "resume", sessionId, listed: o.listed, model: o.model, name: o.name }); return this.#open(this.#take(), sessionId, o.name); }
+  // `facts` is recorded as passed, with no default: a verb that forgets to pass them then shows `undefined`, not `[]`.
+  launch(prompt, o) { this.#load(); this.s.calls.push({ call: "launch", prompt, model: o.model, name: o.name, cwd: o.cwd, facts: o.facts }); return this.#open(this.#take(), null, o.name); }
+  resume(sessionId, o) { this.#load(); this.s.calls.push({ call: "resume", sessionId, listed: o.listed, model: o.model, name: o.name, facts: o.facts }); return this.#open(this.#take(), sessionId, o.name); }
   status(ids) {
     this.#load();
     const x = this.#find(ids);

@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { check } from "../scripts/lib/check.mjs";
 import { next, note, reset, resume, start, status } from "../scripts/lib/verbs.mjs";
 import { FakeBinding } from "./fake-binding.mjs";
-import { TEST_RIDER_MD, makeCtx, settled, tmpProject } from "./helpers.mjs";
+import { FACT_A, INSTANCE_RIDER_MD, TEST_RIDER_MD, makeCtx, settled, tmpProject } from "./helpers.mjs";
 
 const done = (lastText, extra = {}) => ({ statuses: ["done"], read: { lastText, ...extra } });
 const GREEN = "STATUS: planned\n<promise>MILESTONE PLANNED</promise>";
@@ -148,5 +148,20 @@ test("a gone session is resumed with its options again (unlisted)", () => {
   const r = next(ctx, "resume", { on: status(ctx).key, because: "killed, transcript intact" });
   assert.equal(r.state, "running");
   assert.equal(binding.calls.find((c) => c.call === "resume").listed, false);
+  p.cleanup();
+});
+
+test("an instance rider's resume carries its facts and its name, and so does its dry run", () => {
+  const p = tmpProject({ riderMd: INSTANCE_RIDER_MD, instances: ["a"] });
+  const binding = new FakeBinding({ script: [{ statuses: ["gone"] }, { statuses: ["running"] }] });
+  const ctx = makeCtx({ root: p.root, instance: "a", binding });
+  start(ctx);
+  check(ctx);
+  assert.equal(check(ctx).state, "gone");
+  assert.equal(next(ctx, "resume", { on: status(ctx).key, dryRun: true }).argv.at(-1), FACT_A);
+  next(ctx, "resume", { on: status(ctx).key, because: "killed, transcript intact" });
+  const call = binding.calls.find((c) => c.call === "resume");
+  assert.deepEqual([call.listed, call.facts], [false, [FACT_A]]);
+  assert.match(call.name, /^rider lemmaria\/a\/[0-9a-f]{4} plan$/);
   p.cleanup();
 });

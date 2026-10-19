@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { existsSync, readdirSync } from "node:fs";
 import { start } from "../scripts/lib/verbs.mjs";
 import { FakeBinding } from "./fake-binding.mjs";
-import { TEST_RIDER_MD, makeCtx, tmpProject } from "./helpers.mjs";
+import { FACT_A, INSTANCE_RIDER_MD, TEST_RIDER_MD, makeCtx, tmpProject } from "./helpers.mjs";
 
 test("a fresh start runs intake, creates the run in state.json, launches the start phase, spawns the watcher", () => {
   const p = tmpProject();
@@ -29,9 +29,28 @@ test("a fresh start runs intake, creates the run in state.json, launches the sta
   assert.equal(spawned, 1);
   const launch = binding.calls[0];
   assert.equal(launch.prompt, "PLAN PROMPT");
-  assert.equal(launch.name, `rider lemmaria/${run.runId} plan`);
+  assert.equal(launch.name, `rider lemmaria/default/${run.runId} plan`);
   assert.equal(launch.cwd, p.root);
   p.cleanup();
+});
+
+test("an instance rider's launch carries its facts and its name; an undeclared rider's carries none", () => {
+  const p = tmpProject({ riderMd: INSTANCE_RIDER_MD, instances: ["a", "b"] });
+  const binding = new FakeBinding({ script: [{ statuses: ["running"] }] });
+  const ctx = makeCtx({ root: p.root, instance: "a", binding });
+  assert.equal(start(ctx, { dryRun: true }).argv.at(-1), FACT_A, "the dry run previews the same launch");
+  start(ctx);
+  assert.deepEqual(binding.calls[0].facts, [FACT_A]);
+  assert.match(binding.calls[0].name, /^rider lemmaria\/a\/[0-9a-f]{4} plan$/);
+  assert.equal(binding.calls[0].prompt, "PLAN PROMPT", "the prompt file is sent whole and unmodified");
+  p.cleanup();
+
+  const q = tmpProject();
+  const plain = new FakeBinding({ script: [{ statuses: ["running"] }] });
+  start(makeCtx({ root: q.root, binding: plain }));
+  assert.deepEqual(plain.calls[0].facts, []);
+  assert.match(plain.calls[0].name, /^rider lemmaria\/default\//);
+  q.cleanup();
 });
 
 test("start names a phase as an operator override; a human or unknown phase is refused", () => {

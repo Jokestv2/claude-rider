@@ -4,7 +4,7 @@ import { RUN, readouts } from "./check.mjs";
 import { currentKey, nowLine, parseRunKey, parseStretchKey, snapshot } from "./keys.mjs";
 import { legalLabels, onwardEdges, overrulable } from "./rider-md.mjs";
 import { sh } from "./shell.mjs";
-import { currentSession, keyOf, newRun, totalCost } from "./state.mjs";
+import { currentSession, keyOf, newRun, scopeOf, totalCost } from "./state.mjs";
 
 export function refuse(error) { return { ok: false, error }; }
 
@@ -55,7 +55,14 @@ function staleActive(run, on) {
 }
 
 const labelList = (ctx, phase) => legalLabels(ctx.rider, phase).map((l) => l.label).join(" · ");
-const sessionName = (run, phase) => `rider ${run.rider}/${run.runId} ${phase}`;
+const sessionName = (run, instance, phase) => `rider ${run.rider}/${instance}/${run.runId} ${phase}`;
+
+/** §12: a phase prompt is shared by every instance and sent verbatim, so which instance a run serves reaches the
+ *  session as a line of appended system text. A rider without `instances` has one instance and nothing to tell. */
+export function instanceFacts(ctx) {
+  if (!ctx.instance.declared) return [];
+  return [`This run serves instance \`${ctx.instance.id}\` of the rider \`${ctx.rider.name}\`. The instance's directory is \`${scopeOf(ctx.instance)}\`, relative to the project root.`];
+}
 
 /** A fresh run: intake (the one mechanical refusal before spend, §4.3), the run record, the start phase. */
 export function start(ctx, { phase = null, dryRun = false } = {}) {
@@ -106,11 +113,12 @@ export function enterPhase(ctx, run, phase, { dryRun = false } = {}) {
   }
   const prompt = readFileSync(def.prompt, "utf8");
   const model = ctx.local.models?.[phase] ?? def.model;
-  const name = sessionName(run, phase);
-  if (dryRun) return { ok: true, state: "dry-run", phase, model, name, argv: ctx.binding.dryRun.launchArgv(prompt, { model, name }) };
+  const name = sessionName(run, ctx.instance.id, phase);
+  const facts = instanceFacts(ctx);
+  if (dryRun) return { ok: true, state: "dry-run", phase, model, name, argv: ctx.binding.dryRun.launchArgv(prompt, { model, name, facts }) };
   let ids;
   try {
-    ids = ctx.binding.launch(prompt, { model, name, cwd: ctx.root });
+    ids = ctx.binding.launch(prompt, { model, name, cwd: ctx.root, facts });
   } catch (e) {
     const because = `launch failed: ${e.message}`;
     run.transitions.push({ at, from: phase, label: "operator", to: "operator", because, by: "executor" });
@@ -196,11 +204,13 @@ export function resume(ctx, { on, because = null, by = "judge", reason = null, d
     const listed = ctx.binding.status(ids).listed;
     const baselineTurns = ctx.binding.read(ids).turns;
     const model = ctx.local.models?.[run.phase] ?? def.model;
-    const name = sessionName(run, run.phase);
-    if (dryRun) return { ok: true, state: "dry-run", phase: run.phase, model, name, argv: ctx.binding.dryRun.resumeArgv(prev.id, { listed, model, name }) };
+    const name = sessionName(run, ctx.instance.id, run.phase);
+    // Passed listed or not: the binding knows which resume can carry them, and a listed one drops them (§12).
+    const facts = instanceFacts(ctx);
+    if (dryRun) return { ok: true, state: "dry-run", phase: run.phase, model, name, argv: ctx.binding.dryRun.resumeArgv(prev.id, { listed, model, name, facts }) };
     let got;
     try {
-      got = ctx.binding.resume(prev.id, { listed, model, name, cwd: ctx.root });
+      got = ctx.binding.resume(prev.id, { listed, model, name, cwd: ctx.root, facts });
     } catch (e) {
       return refuse(`resume failed: ${e.message}`);
     }

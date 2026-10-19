@@ -70,6 +70,8 @@ Test rider: the §2.4 graph with commands that work in an empty directory.
 
 /** The test rider with its instances declared as the directories under `nodes/`. */
 export const INSTANCE_RIDER_MD = TEST_RIDER_MD.replace("name: lemmaria\n", "name: lemmaria\ninstances: nodes/*\n");
+/** What a session on instance `a` of that rider is told (§12), written out rather than built: the exact text is the spec's. */
+export const FACT_A = "This run serves instance `a` of the rider `lemmaria`. The instance's directory is `nodes/a`, relative to the project root.";
 
 export function tmpProject({ riderMd = TEST_RIDER_MD, name = "lemmaria", prompts = { plan: "PLAN PROMPT", build: "BUILD PROMPT", close: "CLOSE PROMPT" }, instances = [] } = {}) {
   const root = mkdtempSync(join(tmpdir(), "rider-"));

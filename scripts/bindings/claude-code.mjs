@@ -211,7 +211,9 @@ export function createBinding({ claudePath = null, advisor = null, launchArgs = 
   // Placed before the rider's own flags: a variadic flag (`--mcp-config a b`) then ends at `-n` instead
   // of swallowing the prompt. Validated here because a string would spread into single characters.
   if (!Array.isArray(launchArgs) || launchArgs.some((a) => typeof a !== "string")) throw new Error("launchArgs in local.json must be a list of strings, one argv element each");
-  const common = ({ model, name }) => ["--bg", ...launchArgs, "-n", name, "--model", model, "--permission-mode", permissionMode || "auto", "--append-system-prompt", SYSTEM_APPEND, ...(advisor ? ["--advisor", advisor] : [])];
+  // `facts` (§12) are what the shared, verbatim prompt cannot say: which instance this run serves. They follow
+  // SYSTEM_APPEND in the same flag value; a listed resume passes none, since the session keeps the text it launched with.
+  const common = ({ model, name, facts = [] }) => ["--bg", ...launchArgs, "-n", name, "--model", model, "--permission-mode", permissionMode || "auto", "--append-system-prompt", [SYSTEM_APPEND, ...facts].join(" "), ...(advisor ? ["--advisor", advisor] : [])];
   const launchArgv = (prompt, o) => [...common(o), prompt];
   const resumeArgv = (sessionId, o) => (o.listed ? ["--bg", "--resume", sessionId, RESUME_NUDGE] : [...common(o), "--resume", sessionId, RESUME_NUDGE]);
   const spawnBg = (argv, cwd) => {
@@ -224,8 +226,8 @@ export function createBinding({ claudePath = null, advisor = null, launchArgs = 
   };
   return {
     name: "claude-code",
-    launch: (prompt, { model, name, cwd }) => spawnBg(launchArgv(prompt, { model, name }), cwd),
-    resume: (sessionId, { listed, model, name, cwd }) => { const r = spawnBg(resumeArgv(sessionId, { listed, model, name }), cwd); return { ...r, sessionId: r.sessionId ?? sessionId }; },
+    launch: (prompt, { model, name, cwd, facts = [] }) => spawnBg(launchArgv(prompt, { model, name, facts }), cwd),
+    resume: (sessionId, { listed, model, name, cwd, facts = [] }) => { const r = spawnBg(resumeArgv(sessionId, { listed, model, name, facts }), cwd); return { ...r, sessionId: r.sessionId ?? sessionId }; },
     status: (ids) => { const entry = findEntry(agents(), ids); return { kind: classifyRegistry(entry, alive), entry, listed: !!entry }; },
     read: (ids) => { const p = findTranscript(projectsDir, ids.sessionId); return { ...readTranscript(p ? readFileSync(p, "utf8") : ""), transcript: p }; },
     stop: (ids) => { claude(["stop", ids.shortId ?? ids.sessionId]); },

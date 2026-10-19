@@ -1,7 +1,7 @@
 // test/binding-pure.test.mjs
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { RESUME_NUDGE, SYSTEM_APPEND, classifyNoMarker, classifyRegistry, parseBgLaunch, parseResetTime, readTranscript } from "../scripts/bindings/claude-code.mjs";
+import { RESUME_NUDGE, SYSTEM_APPEND, classifyNoMarker, classifyRegistry, createBinding, parseBgLaunch, parseResetTime, readTranscript } from "../scripts/bindings/claude-code.mjs";
 
 const alive = () => true;
 const dead = () => false;
@@ -19,6 +19,20 @@ test("the two texts are the v2 texts, verbatim", () => {
   assert.match(SYSTEM_APPEND, /ending your turn while one runs is safe\.$/);
   assert.match(RESUME_NUDGE, /^Your previous turn was interrupted by the environment/);
   assert.match(RESUME_NUDGE, /<promise> marker your original instructions require\.$/);
+});
+
+test("instance facts follow SYSTEM_APPEND at launch and on an unlisted resume; a listed resume stays bare", () => {
+  const b = createBinding({ claudePath: "claude-x", exec: () => { throw new Error("a dry run spawns nothing"); } });
+  const fact = "This run serves instance `a` of the rider `lemmaria`. The instance's directory is `nodes/a`, relative to the project root.";
+  const o = { model: "opus", name: "n", facts: [fact] };
+  const appended = (argv) => argv[argv.indexOf("--append-system-prompt") + 1];
+  assert.equal(appended(b.dryRun.launchArgv("PROMPT", o)), `${SYSTEM_APPEND} ${fact}`);
+  assert.equal(b.dryRun.launchArgv("PROMPT", o).at(-1), "PROMPT", "the prompt is sent whole, last");
+  assert.equal(appended(b.dryRun.resumeArgv("id", { ...o, listed: false })), `${SYSTEM_APPEND} ${fact}`);
+  // Passed and still dropped: a listed session keeps the system text it was launched with (§12).
+  assert.deepEqual(b.dryRun.resumeArgv("id", { ...o, listed: true }), ["--bg", "--resume", "id", RESUME_NUDGE]);
+  // No facts, nothing appended: the value is SYSTEM_APPEND alone.
+  assert.equal(appended(b.dryRun.launchArgv("PROMPT", { model: "opus", name: "n" })), SYSTEM_APPEND);
 });
 
 test("bg launch line parses through ANSI; garbage is null", () => {
