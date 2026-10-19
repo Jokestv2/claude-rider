@@ -1,11 +1,52 @@
 // scripts/lib/verbs.mjs
 import { readFileSync } from "node:fs";
 import { RUN, readouts } from "./check.mjs";
+import { currentKey, nowLine, parseRunKey, parseStretchKey, snapshot } from "./keys.mjs";
 import { legalLabels, onwardEdges, overrulable } from "./rider-md.mjs";
 import { sh } from "./shell.mjs";
 import { currentSession, keyOf, newRun, totalCost } from "./state.mjs";
 
 export function refuse(error) { return { ok: false, error }; }
+
+/** §8: a decision names what it judged, and that is checked inside the hold before anything else. A missing or malformed
+ *  key is a usage error and leaves no trace. A stale one is refused with the state it missed and recorded as `refused`,
+ *  except under --dry-run, which runs nothing. Null when the key is the instance's current one. */
+function keyRefusal(ctx, verb, on, { dryRun = false } = {}) {
+  const stretch = verb === "next" || verb === "resume";
+  const k = stretch ? parseStretchKey(on) : parseRunKey(on);
+  if (!k) {
+    const shape = stretch ? "<runId>.<n> (e.g. 3f2a.4), the stretch it judged — copy rider check's decide-with line" : "<runId> (e.g. 3f2a), the run it acts on — rider status names it";
+    return refuse(on == null ? `${verb} needs --on ${shape}` : `--on "${on}" is not ${shape}`);
+  }
+  const state = ctx.readState();
+  const reason = stretch ? staleStretch(ctx, state.run, on, k) : verb === "overrule" ? staleEnded(state, on) : staleActive(state.run, on);
+  if (!reason) return null;
+  const current = snapshot(state, ctx.rider);
+  const error = `${reason}; now ${nowLine(current)}`;
+  if (!dryRun) ctx.event("refused", { runId: current.runId, phase: current.phase, key: on, text: error });
+  return { ok: false, stale: true, error, current };
+}
+
+/** Why a stretch key is not the current one, in the words the verb used before keys, where one applied. */
+function staleStretch(ctx, run, on, k) {
+  if (!run) return "no active run — rider start";
+  const latest = currentKey(run);
+  if (latest === on) return null;
+  const phase = run.runId === k.runId ? run.sessions[k.n - 1]?.phase : null;
+  const judged = phase ? `${on} judged phase ${phase}` : `${on} is no stretch of run ${run.runId}`;
+  return ctx.rider.phases[run.phase]?.kind === "human" ? `${judged}, but ${run.phase} is a human phase — rider check runs its check command` : `${judged}, but the latest stretch of ${run.phase} is ${latest ?? "none"}`;
+}
+
+function staleEnded(state, on) {
+  if (state.run) return `run ${state.run.runId} is active at phase ${state.run.phase} — overrule revives a run that stopped at operator`;
+  if (!state.lastRun) return "no ended run — nothing to overrule";
+  return state.lastRun.runId === on ? null : `${on} is not the last ended run`;
+}
+
+function staleActive(run, on) {
+  if (!run) return "no active run — nothing to reset";
+  return run.runId === on ? null : `${on} is not the active run`;
+}
 
 const labelList = (ctx, phase) => legalLabels(ctx.rider, phase).map((l) => l.label).join(" · ");
 const sessionName = (run, phase) => `rider ${run.rider}/${run.runId} ${phase}`;
@@ -78,21 +119,21 @@ export function enterPhase(ctx, run, phase, { dryRun = false } = {}) {
 }
 
 /** The judge's decision: a label from the current phase's edges (§4.3), or the two reserved ones. */
-export function next(ctx, label, { because = null, dryRun = false } = {}) {
+export function next(ctx, label, { on, because = null, by = "judge", dryRun = false } = {}) {
   return readouts(ctx, ctx.update(() => {
+    const refused = keyRefusal(ctx, "next", on, { dryRun });
+    if (refused) return refused;
+    // The key matched, so the run is active and its phase has a session: a human phase has no key to match.
     const run = ctx.loadRun();
-    if (!run) return refuse("no active run — rider start");
-    const def = ctx.rider.phases[run.phase];
-    if (def.kind === "human") return refuse(`${run.phase} is a human phase — rider check runs its check command`);
     if (!label) return refuse(`next needs a label — legal: ${labelList(ctx, run.phase)}`);
     const sess = currentSession(run);
-    if (!sess || sess.outcome === "running" || sess.outcome === "waiting") return refuse(`${run.phase} is still ${sess?.outcome ?? "unlaunched"} — rider check first`);
-    if (label === "resume") return resume(ctx, { reason: because ?? "judge", dryRun });
-    // Only the declared labels: a label like "toString" must not read through Object.prototype on def.edges.
+    if (sess.outcome === "running" || sess.outcome === "waiting") return refuse(`${run.phase} is still ${sess.outcome} — rider check first`);
+    if (label === "resume") return resume(ctx, { on, because, by, dryRun });
+    // Only the declared labels: a label like "toString" must not read through Object.prototype on the phase's edges.
     const to = legalLabels(ctx.rider, run.phase).find((l) => l.label === label)?.to ?? null;
     if (!to) return refuse(`"${label}" is not an edge of ${run.phase} — legal: ${labelList(ctx, run.phase)}`);
     if (dryRun) return to === "operator" ? { ok: true, state: "dry-run", to: "operator" } : enterPhase(ctx, run, to, { dryRun: true });
-    run.transitions.push({ at: ctx.now().toISOString(), from: run.phase, label, to, because });
+    run.transitions.push({ at: ctx.now().toISOString(), from: run.phase, label, to, because, by });
     ctx.event("decided", { runId: run.runId, phase: run.phase, key: keyOf(run, sess), text: `${label} → ${to}${because ? `: ${because}` : ""}` });
     if (to === "operator") {
       const reason = because ?? `${label} from ${run.phase}`;
@@ -108,10 +149,10 @@ export function next(ctx, label, { because = null, dryRun = false } = {}) {
  *  run, and `start` cannot enter a human phase — so a ruling of "the phase's outcome stands" had no verb
  *  to carry it. The judge's stop stays in `transitions` and the ruling lands beside it as
  *  `by: "operator"`: the pair is one judge call and its review, which is what the record is read for. */
-export function overrule(ctx, label, { because = null, dryRun = false } = {}) {
+export function overrule(ctx, label, { on, because, dryRun = false } = {}) {
   return readouts(ctx, ctx.update(() => {
-    const active = ctx.loadRun();
-    if (active) return refuse(`run ${active.runId} is active at phase ${active.phase} — overrule revives a run that stopped at operator`);
+    const refused = keyRefusal(ctx, "overrule", on, { dryRun });
+    if (refused) return refused;
     const run = ctx.lastEndedRun();
     if (!run) return refuse("no ended run — nothing to overrule");
     const stop = run.transitions.at(-1);
@@ -133,15 +174,16 @@ export function overrule(ctx, label, { because = null, dryRun = false } = {}) {
   }));
 }
 
-/** The reflexive edge: re-enter the current session with the nudge (§2.2 `resume`). */
-export function resume(ctx, { reason = "judge", dryRun = false } = {}) {
+/** The reflexive edge: re-enter the current session with the nudge (§2.2 `resume`). A transition like any other (§6.1),
+ *  so a competing resume shows as the latest decision. `reason` is the session's resumeReason: the watcher's is `rate-limit`. */
+export function resume(ctx, { on, because = null, by = "judge", reason = null, dryRun = false } = {}) {
   return ctx.update(() => {
+    const refused = keyRefusal(ctx, "resume", on, { dryRun });
+    if (refused) return refused;
     const run = ctx.loadRun();
-    if (!run) return refuse("no active run — rider start");
     const def = ctx.rider.phases[run.phase];
-    if (def.kind !== "session") return refuse(`${run.phase} is a human phase; nothing to resume`);
     const prev = currentSession(run);
-    if (!prev?.id) return refuse(`no session to resume for ${run.phase}`);
+    if (!prev.id) return refuse(`no session to resume for ${run.phase}`);
     if (prev.outcome === "running" || prev.outcome === "waiting") return refuse(`session ${prev.shortId} is ${prev.outcome} — rider check first`);
     const ids = { shortId: prev.shortId, sessionId: prev.id };
     const listed = ctx.binding.status(ids).listed;
@@ -155,13 +197,15 @@ export function resume(ctx, { reason = "judge", dryRun = false } = {}) {
     } catch (e) {
       return refuse(`resume failed: ${e.message}`);
     }
-    const sess = { phase: run.phase, model, id: got.sessionId ?? prev.id, shortId: got.shortId, resumedFrom: prev.id, resumeReason: reason, at: ctx.now().toISOString(), outcome: "running", baselineTurns, watcherSpawns: 0 };
+    const why = reason ?? because ?? "judge";
+    const sess = { phase: run.phase, model, id: got.sessionId ?? prev.id, shortId: got.shortId, resumedFrom: prev.id, resumeReason: why, at: ctx.now().toISOString(), outcome: "running", baselineTurns, watcherSpawns: 0 };
     run.sessions.push(sess);
+    run.transitions.push({ at: sess.at, from: run.phase, label: "resume", to: run.phase, because, by });
     ctx.saveRun(run);
     if (ctx.ensureWatcher()) { sess.watcherSpawns++; ctx.saveRun(run); }
-    ctx.event("resumed", { runId: run.runId, phase: run.phase, key: keyOf(run, prev), text: `${reason} · session ${sess.shortId ?? sess.id}` });
+    ctx.event("resumed", { runId: run.runId, phase: run.phase, key: keyOf(run, prev), text: `${why} · session ${sess.shortId ?? sess.id}` });
     const nids = { shortId: sess.shortId, sessionId: sess.id };
-    return { ok: true, state: "running", runId: run.runId, phase: run.phase, resumed: prev.id, reason, session: nids, attach: ctx.binding.attachHint(nids) };
+    return { ok: true, state: "running", runId: run.runId, phase: run.phase, resumed: prev.id, reason: why, session: nids, attach: ctx.binding.attachHint(nids) };
   });
 }
 
@@ -176,9 +220,9 @@ export function status(ctx) {
   const sess = currentSession(run);
   const state = def.kind === "human" ? "human" : !sess ? "none" : sess.outcome === "running" ? "running" : sess.outcome === "waiting" ? "waiting" : "finished";
   return {
-    ok: true, state, rider: run.rider, ...where, runId: run.runId, phase: run.phase, visits: run.visits, baseBranch: run.baseBranch ?? null, workBranch: run.workBranch ?? null, workTip: run.workTip ?? null, startedAt: run.startedAt, watcher, lastEvent,
+    ok: true, state, rider: run.rider, ...where, runId: run.runId, key: currentKey(run), phase: run.phase, visits: run.visits, baseBranch: run.baseBranch ?? null, workBranch: run.workBranch ?? null, workTip: run.workTip ?? null, startedAt: run.startedAt, watcher, lastEvent,
     totalCost: totalCost(run),
-    sessions: run.sessions.map((s) => ({ phase: s.phase, model: s.model, shortId: s.shortId, id: s.id, outcome: s.outcome, cost: s.cost ?? null, turns: s.turns ?? null, at: s.at, resumedFrom: s.resumedFrom ?? null })),
+    sessions: run.sessions.map((s) => ({ key: keyOf(run, s), phase: s.phase, model: s.model, shortId: s.shortId, id: s.id, outcome: s.outcome, cost: s.cost ?? null, turns: s.turns ?? null, at: s.at, resumedFrom: s.resumedFrom ?? null })),
     transitions: run.transitions, notes: run.notes,
     attach: sess?.shortId ? ctx.binding.attachHint({ shortId: sess.shortId, sessionId: sess.id }) : null,
     lastRun,
@@ -202,17 +246,20 @@ export function note(ctx, text) {
 }
 
 /** Forget the active run (its record is kept under runs/); the project's own state is the truth. */
-export function reset(ctx) {
+export function reset(ctx, { on, because = null, by = "judge" } = {}) {
   return ctx.update(() => {
+    const refused = keyRefusal(ctx, "reset", on);
+    if (refused) return refused;
     const run = ctx.loadRun();
     ctx.killWatcher();
-    if (!run) return { ok: true, state: "none", message: "no active run; nothing to reset" };
     // Forgetting a live phase leaves a paid session running with nothing tracking it: name it, and say
     // how to stop it. The harness-shaped stop line comes from the binding (§5), never from here.
     const sess = currentSession(run);
     const live = sess && (sess.outcome === "running" || sess.outcome === "waiting");
     const paid = live ? ` — session ${sess.shortId ?? sess.id} is still ${sess.outcome} and still paying: ${ctx.binding.stopHint({ shortId: sess.shortId, sessionId: sess.id })}` : "";
-    const reason = `rider reset${paid}`;
+    const why = because ?? "rider reset";
+    run.transitions.push({ at: ctx.now().toISOString(), from: run.phase, label: "reset", to: "reset", because: why, by });
+    const reason = `${why}${paid}`;
     ctx.event("reset", { runId: run.runId, phase: run.phase, key: sess ? keyOf(run, sess) : null, text: reason });
     ctx.endRun(run, { endedBy: "reset", reason });
     return { ok: true, state: "none", message: `run ${run.runId} forgotten; its record is under runs/${paid}` };

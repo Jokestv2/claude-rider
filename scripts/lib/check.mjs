@@ -1,14 +1,17 @@
 // scripts/lib/check.mjs
+import { decideWithLine } from "./keys.mjs";
 import { signedOff, statusHint, waitingIsDone } from "./markers.mjs";
 import { legalLabels } from "./rider-md.mjs";
 import { sh } from "./shell.mjs";
-import { chainCost, chainResumes, currentSession, totalCost } from "./state.mjs";
+import { chainCost, chainResumes, currentSession, keyOf, totalCost } from "./state.mjs";
 import { readJson } from "./store.mjs";
 
 const SETTLE_MS = 1000;
 const DONE_GRACE_MS = 10 * 60_000;
 const EVIDENCE_CAP = 2048;
 const STOPPED = new Set(["done", "gone", "rate-limited"]);
+/** The states a judge decides on, so the ones `check` prints a decide-with line for. */
+const DECIDABLE = new Set([...STOPPED, "intervened"]);
 /** The run a locked write committed, carried on its result for the readouts that run after the lock is released.
  *  A symbol key, so `--json` never prints it. */
 export const RUN = Symbol("run");
@@ -201,7 +204,7 @@ function checkHuman(ctx, run, def) {
     return { state: "none", ended: { runId: run.runId, phase: run.phase, reason }, lastRun: run };
   }
   // The check runs inside the hold, since its exit decides whether the run ends; `show` only informs (`readouts`).
-  return { state: "human", rider: run.rider, runId: run.runId, phase: run.phase, check: def.check, checkExit: r.status, checkOutput: r.output, show: null, notes: run.notes, totalCost: totalCost(run), [RUN]: run };
+  return { state: "human", rider: run.rider, runId: run.runId, key: null, phase: run.phase, check: def.check, checkExit: r.status, checkOutput: r.output, show: null, notes: run.notes, totalCost: totalCost(run), [RUN]: run };
 }
 
 /** Gate precision, mechanically: the commits that landed after the sessions handed over — every one is
@@ -224,9 +227,11 @@ function result(ctx, run, sess, outcome, finalText, note = null) {
   // `intervened` overrides only a STOPPED outcome: a live (running/waiting) session the operator once
   // typed into would otherwise read intervened on every check, and the watcher would loop on it.
   const state = sess.intervened && STOPPED.has(outcome) ? "intervened" : outcome;
+  const key = keyOf(run, sess);
+  const labels = legalLabels(ctx.rider, run.phase);
   return {
     state, outcome, note,
-    rider: run.rider, runId: run.runId, phase: run.phase, visit: run.visits[run.phase] ?? 1,
+    rider: run.rider, runId: run.runId, key, phase: run.phase, visit: run.visits[run.phase] ?? 1,
     session: { id: sess.id, shortId: sess.shortId, model: sess.model, at: sess.at, resumedFrom: sess.resumedFrom ?? null },
     attach: ctx.binding.attachHint(ids),
     statusHint: sess.statusHint ?? statusHint(finalText),
@@ -237,7 +242,8 @@ function result(ctx, run, sess, outcome, finalText, note = null) {
     humanTurns: sess.humanTurns ?? 0, humanTurnDetails: sess.humanTurnDetails ?? [], cost: sess.cost ?? null, turns: sess.turns ?? null, elapsedMs: sess.elapsedMs ?? null,
     question: sess.question ?? null, finalText,
     evidence: [], // `readouts` fills it once the lock is released
-    labels: legalLabels(ctx.rider, run.phase), log: sess.log ?? null,
+    labels, log: sess.log ?? null,
+    decideWith: DECIDABLE.has(state) ? decideWithLine({ rider: ctx.rider.name, multiRider: ctx.riderCount > 1, instance: ctx.instance.id, declared: !!ctx.instance.declared, key, labels: labels.map((l) => l.label) }) : null,
     [RUN]: run,
   };
 }

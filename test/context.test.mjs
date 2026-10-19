@@ -7,7 +7,7 @@ import { check } from "../scripts/lib/check.mjs";
 import { loadRider } from "../scripts/lib/rider-md.mjs";
 import { isLive } from "../scripts/lib/state.mjs";
 import { endedRunPath, readJson, readState } from "../scripts/lib/store.mjs";
-import { next, overrule, reset, start } from "../scripts/lib/verbs.mjs";
+import { next, overrule, reset, start, status } from "../scripts/lib/verbs.mjs";
 import { awaitEvent, watchLoop } from "../scripts/lib/watch.mjs";
 import { FakeBinding } from "./fake-binding.mjs";
 import { FakeClock, limitSoon, makeCtx, tmpProject } from "./helpers.mjs";
@@ -54,19 +54,19 @@ test("every nested path completes without waiting on its own lock", () => {
     free("check that stops the session");
 
     binding.s.scripts.push({ statuses: ["done"], read: { lastText: "STATUS: planned", turns: 9 } });
-    assert.equal(next(ctx, "resume", { because: "once more" }).state, "running"); // next → resume
+    assert.equal(next(ctx, "resume", { on: status(ctx).key, because: "once more" }).state, "running"); // next → resume
     free("next resume");
     assert.equal(check(ctx).state, "done");
 
     binding.s.scripts.push({ statuses: ["done"], read: { lastText: null, signal: limitSoon(clock), turns: 20 } }, { statuses: ["done"], read: { lastText: "STATUS: code green", turns: 35 } });
-    assert.equal(next(ctx, "planned", { because: "plan committed" }).phase, "build"); // next → enterPhase
+    assert.equal(next(ctx, "planned", { on: status(ctx).key, because: "plan committed" }).phase, "build"); // next → enterPhase
     free("next planned");
     assert.equal(watchLoop(ctx, { pollMs: 30_000 }).state, "done"); // check per poll, the rate-limit resume, one emit
     free("watchLoop through a rate-limit resume");
     assert.deepEqual(binding.calls.filter((c) => c.call === "resume").length, 2);
 
     binding.s.scripts.push({ statuses: ["running"] });
-    assert.equal(next(ctx, "code green", { because: "tests green" }).phase, "close");
+    assert.equal(next(ctx, "code green", { on: status(ctx).key, because: "tests green" }).phase, "close");
     const before = spawns;
     assert.equal(awaitEvent(ctx, { maxMinutes: 1, pollMs: 10_000 }).state, "timeout"); // a dead watcher, respawned
     free("awaitEvent with a dead watcher");
@@ -111,7 +111,7 @@ test("state.json survives the run's end: run null, lastRun filled, the record in
   try {
     const s = start(ctx);
     check(ctx);
-    next(ctx, "blocked", { because: "blocked on x" });
+    next(ctx, "blocked", { on: `${s.runId}.1`, because: "blocked on x" });
     const state = readState(ctx.paths);
     assert.equal(state.run, null);
     assert.deepEqual(state.lastRun, { runId: s.runId, phase: "plan", startedAt: "2026-09-03T12:00:00.000Z", endedAt: clock.now().toISOString(), endedBy: "operator", reason: "blocked on x", totalCost: 4, overrulable: ["planned"] });
@@ -132,18 +132,18 @@ test("overrule's revival moves the record back; lastRun falls back to the run be
   try {
     const one = start(ctx, { phase: "close" });
     check(ctx);
-    next(ctx, "gate green", { because: "gate record closed" });
+    next(ctx, "gate green", { on: `${one.runId}.1`, because: "gate record closed" });
     writeFileSync(flag, "");
     assert.equal(check(ctx).state, "none");
     rmSync(flag);
     clock.t += 60_000; // records are named by start time: two runs started at one frozen instant would tie
     const two = start(ctx, { phase: "close" });
     check(ctx);
-    next(ctx, "operator", { because: "asked for a ruling" });
+    next(ctx, "operator", { on: `${two.runId}.1`, because: "asked for a ruling" });
     assert.equal(readState(ctx.paths).lastRun.runId, two.runId);
     assert.equal(readdirSync(ctx.paths.runs).length, 2);
 
-    assert.equal(overrule(ctx, "gate green", { because: "the correction stands" }).state, "human");
+    assert.equal(overrule(ctx, "gate green", { on: two.runId, because: "the correction stands" }).state, "human");
     const state = readState(ctx.paths);
     assert.equal(state.run.runId, two.runId);
     assert.equal(state.run.endedBy, undefined);
@@ -185,13 +185,13 @@ test("a verb whose hold throws leaves no record event for the write it never mad
     assert.equal(check(ctx).state, "done");
     // next queues decided, then entering build throws the same way: no decided, and the run has not moved.
     rmSync(join(p.riderDir, "build.md"));
-    assert.throws(() => next(ctx, "planned", { because: "plan committed" }), /ENOENT/);
+    assert.throws(() => next(ctx, "planned", { on: status(ctx).key, because: "plan committed" }), /ENOENT/);
     assert.deepEqual(kinds(), ["run-started", "phase-entered"]);
     assert.deepEqual([ctx.loadRun().phase, ctx.loadRun().transitions.length], ["plan", 0]);
 
     // reset queues reset, then the end's first write fails: a file stands where runs/ goes.
     writeFileSync(ctx.paths.runs, "");
-    assert.throws(() => reset(ctx), { code: "EEXIST" });
+    assert.throws(() => reset(ctx, { on: status(ctx).runId }), { code: "EEXIST" });
     assert.deepEqual(kinds(), ["run-started", "phase-entered"], "neither reset nor run-ended");
     assert.equal(ctx.loadRun().phase, "plan", "state.json is the truth: the run is still active");
     assert.equal(ctx.holding(), false);

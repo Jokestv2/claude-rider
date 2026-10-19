@@ -1,24 +1,21 @@
 // scripts/lib/watch.mjs
 import { check, respawnWatcher, RUN } from "./check.mjs";
+import { currentKey } from "./keys.mjs";
 import { fmtDuration } from "./markers.mjs";
 import { consecutiveRateLimitResumes, currentSession, isLive, keyOf } from "./state.mjs";
 import { WAKE_KINDS } from "./store.mjs";
 import { resume } from "./verbs.mjs";
 
-/** The key of the stretch a check result is about, read off the run that check committed. */
-const stretchKey = (r) => { const run = r[RUN]; const sess = run && currentSession(run); return sess ? keyOf(run, sess) : null; };
 /** One wake event is one short locked write: the watcher never holds the instance across a sleep (§13). It re-reads
  *  the run first: a judge reading the stored block may have decided since this watcher's check, and an event for a
  *  stretch the run has moved past would wake the await armed on the next one. False, and nothing written, when it moved on. */
 const emit = (ctx, r, kind, text = "") => ctx.update(() => {
-  const key = stretchKey(r);
-  const run = ctx.loadRun();
-  const sess = run && currentSession(run);
-  if (!sess || keyOf(run, sess) !== key) return false;
-  ctx.event(kind, { runId: r.runId, phase: r.phase, key, text });
+  if (!r.key || currentKey(ctx.loadRun()) !== r.key) return false;
+  ctx.event(kind, { runId: r.runId, phase: r.phase, key: r.key, text });
   return true;
 });
 const MOVED_ON = "the run moved on; exiting";
+const MOVED_ON_WAITING = "the run moved on while waiting; exiting";
 
 /** The give-up event when `check` keeps throwing. Reads the run defensively: a corrupt state.json is the
  *  likeliest reason check threw at all, and `loadRun` would then throw again here. */
@@ -73,7 +70,8 @@ export function watchLoop(ctx, { maxWaitHours = 6, pollMs = 30_000, maxResumes =
       continue;
     }
     if (r.outcome === "rate-limited" && r.state === "rate-limited") {
-      const run = ctx.loadRun();
+      // The run this check committed, not a fresh read: a reset since would leave no run to count resumes on.
+      const run = r[RUN];
       const consecutive = consecutiveRateLimitResumes(run.sessions, run.phase);
       const resetAt = r.rateLimit?.resetAt ? new Date(r.rateLimit.resetAt) : null;
       const waitMs = resetAt ? resetAt.getTime() - ctx.now().getTime() : null;
@@ -88,14 +86,15 @@ export function watchLoop(ctx, { maxWaitHours = 6, pollMs = 30_000, maxResumes =
       }
       const until = resetAt.getTime() + 60_000;
       log(`rate limited; waiting ${fmtDuration(until - ctx.now().getTime())} for the reset, then resuming ${r.session.id}`);
-      const sessAt = r.session.at;
+      // The key of the stretch it waits on: its resume is a decision like any other (§8), refused if anyone else moved first.
+      const waited = r.key;
       while (ctx.now().getTime() < until) {
         ctx.sleep(Math.min(15 * 60_000, until - ctx.now().getTime()));
-        const fresh = ctx.loadRun();
-        if (!fresh || fresh.runId !== r.runId || fresh.phase !== r.phase || currentSession(fresh)?.at !== sessAt) { log("the run moved on while waiting; exiting"); return null; }
+        if (currentKey(ctx.loadRun()) !== waited) { log(MOVED_ON_WAITING); return null; }
       }
-      const res = resume(ctx, { reason: "rate-limit" });
+      const res = resume(ctx, { on: waited, by: "executor", reason: "rate-limit" });
       if (!res.ok) {
+        if (res.stale) { log(MOVED_ON_WAITING); return null; }
         if (!emit(ctx, r, "rate-limited", `resume failed: ${res.error}`)) { log(MOVED_ON); return null; }
         return r;
       }

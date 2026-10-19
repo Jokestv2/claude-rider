@@ -15,18 +15,21 @@ import { awaitEvent, watchLoop } from "./lib/watch.mjs";
 const USAGE = `rider — drive riders/<name>/RIDER.md one phase at a time (run from the project root)
 
   rider start [phase]                 fresh run: intake, then launch the start phase (or the named one)
-  rider next <label> --because "…"    take an edge of the current phase; also: resume · operator
-  rider check                         classify the current session; print the block the judge reads
-  rider resume                        re-enter the current session after a rate limit or a kill
-  rider overrule <label> --because "…"  the operator's ruling: revive the run that stopped at operator, take the edge
+  rider next <label> --because "…" --on <key>   take an edge of the current phase; also: resume · operator
+  rider check                         classify the current session; print the block the judge reads, and its decide-with line
+  rider resume --on <key>             re-enter the current session after a rate limit or a kill
+  rider overrule <label> --because "…" --on <runId>   the operator's ruling: revive the run that stopped at operator, take the edge
   rider await [--max-minutes N]       block until the watcher's next event (exit 0) or N min (exit 3)
   rider status                        the run at a glance
   rider note "…"                      append to the run record (the last ended run when none is active)
-  rider reset                         forget the active run (its record stays under .rider/<name>/<instance>/runs/)
+  rider reset --on <runId>            forget the active run (its record stays under .rider/<name>/<instance>/runs/)
   rider watch                         the detached watcher itself (spawned by start/next/resume/check)
 
   --rider <directory name>   when the project has several riders   --json   machine-readable output
   --instance <id>  which instance: required when the rider declares instances, else omitted (or default)
+  --on <key>       what the decision judged: <runId>.<n> for next and resume (check prints it), <runId> for overrule and reset;
+                   refused when the instance has moved on since
+  --by judge|operator  who decided, recorded on the transition (default judge; operator for the operator's own ruling)
   --dry-run        start/next/resume/overrule print the harness command and run nothing
   --max-minutes N  await's deadline in minutes (default 60)  --binding <path>  another harness module (or RIDER_BINDING)
 exit: 0 ok · 2 refused or usage · 3 await timed out`;
@@ -45,7 +48,7 @@ function joinBecause(argv) {
 export function parseCli(argv) {
   const { values, positionals } = parseArgs({
     args: joinBecause(argv), allowPositionals: true,
-    options: { rider: { type: "string" }, instance: { type: "string" }, because: { type: "string" }, json: { type: "boolean" }, "dry-run": { type: "boolean" }, "max-minutes": { type: "string" }, binding: { type: "string" }, help: { type: "boolean", short: "h" } },
+    options: { rider: { type: "string" }, instance: { type: "string" }, because: { type: "string" }, on: { type: "string" }, by: { type: "string" }, json: { type: "boolean" }, "dry-run": { type: "boolean" }, "max-minutes": { type: "string" }, binding: { type: "string" }, help: { type: "boolean", short: "h" } },
   });
   const [verb = "status", ...args] = positionals;
   return { verb, args, flags: { ...values } }; // parseArgs' values has a null prototype; deepEqual cares
@@ -57,6 +60,8 @@ export async function main(argv = process.argv.slice(2), { cwd = process.cwd(), 
   if (cli.flags.help) { stdout(USAGE); return 0; }
   // Every failure before or during dispatch is a refusal: one line (a JSON object under --json), exit 2 — never a stack trace.
   const fail = (message) => { if (cli.flags.json) stdout(JSON.stringify({ ok: false, error: message })); else stderr(message); return 2; };
+  // The executor records its own stops itself; by hand, a decision is a judge's or the operator's (§9).
+  if (cli.flags.by !== undefined && cli.flags.by !== "judge" && cli.flags.by !== "operator") return fail(`--by is judge or operator, not "${cli.flags.by}"\n${USAGE}`);
   const riders = discoverRiders(cwd);
   const pick = cli.flags.rider ?? null;
   const found = pick ? riders.find((r) => r.name === pick) : riders.length === 1 ? riders[0] : null;
@@ -82,16 +87,18 @@ export async function main(argv = process.argv.slice(2), { cwd = process.cwd(), 
     const ctx = createContext({ rider, instance, root: cwd, local, binding, riderCount: riders.length, ...(process.env.RIDER_NO_WATCHER ? { spawnWatcher: () => false } : {}) });
     const out = (r) => stdout(cli.flags.json ? JSON.stringify(r, null, 2) : render(cli.verb, r));
     const dryRun = !!cli.flags["dry-run"];
+    const { on, by } = cli.flags;
+    const because = cli.flags.because ?? null;
     let r;
     switch (cli.verb) {
       case "start": r = verbs.start(ctx, { phase: cli.args[0] ?? null, dryRun }); break;
-      case "next": r = verbs.next(ctx, cli.args[0], { because: cli.flags.because ?? null, dryRun }); break;
+      case "next": r = verbs.next(ctx, cli.args[0], { on, because, by, dryRun }); break;
       case "check": r = check(ctx); break;
-      case "resume": r = verbs.resume(ctx, { reason: cli.flags.because ?? "judge", dryRun }); break;
-      case "overrule": r = verbs.overrule(ctx, cli.args[0], { because: cli.flags.because ?? null, dryRun }); break;
+      case "resume": r = verbs.resume(ctx, { on, because, by, dryRun }); break;
+      case "overrule": r = verbs.overrule(ctx, cli.args[0], { on, because, dryRun }); break;
       case "status": r = verbs.status(ctx); break;
       case "note": r = verbs.note(ctx, cli.args.join(" ")); break;
-      case "reset": r = verbs.reset(ctx); break;
+      case "reset": r = verbs.reset(ctx, { on, because, by }); break;
       case "await": r = awaitEvent(ctx, { maxMinutes }); out(r); return r.ok ? 0 : 3;
       case "watch": return runWatch(ctx, local, stdout);
       default: return fail(`unknown verb "${cli.verb}"\n${USAGE}`);

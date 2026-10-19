@@ -42,16 +42,17 @@ test("start → check → next → … → human check through the CLI, --json a
   const env = { ...process.env, RIDER_BINDING: FAKE, RIDER_FAKE_STATE: state, RIDER_NO_WATCHER: "1" };
   const run = (...args) => { const r = spawnSync(process.execPath, [RIDER, ...args], { cwd: p.root, env, encoding: "utf8" }); return { code: r.status, out: r.stdout, err: r.stderr }; };
   const json = (...args) => { const r = run(...args, "--json"); return { ...r, v: JSON.parse(r.out) }; };
+  const on = () => json("status").v.key; // the key a decision on the current stretch names (§8)
   assert.equal(json("status").v.state, "none");
   assert.equal(json("start").v.state, "running");
-  assert.equal(json("next", "planned").code, 2);
+  assert.equal(json("next", "planned", "--on", on()).code, 2);
   assert.equal(json("check").v.state, "done");
   assert.match(run("check").out, /state: done/);
-  assert.equal(json("next", "planned", "--because", "ok").v.phase, "build");
+  assert.equal(json("next", "planned", "--because", "ok", "--on", on()).v.phase, "build");
   assert.equal(json("check").v.state, "done");
-  assert.equal(json("next", "code green", "--because", "ok").v.phase, "close");
+  assert.equal(json("next", "code green", "--because", "ok", "--on", on()).v.phase, "close");
   assert.equal(json("check").v.state, "done");
-  assert.equal(json("next", "gate green", "--because", "ok").v.state, "human");
+  assert.equal(json("next", "gate green", "--because", "ok", "--on", on()).v.state, "human");
   assert.equal(json("status").v.state, "human");
   assert.equal(json("await").v.reason, "phase merge is a human phase");
   assert.equal(json("check").v.state, "human");
@@ -73,11 +74,11 @@ test("overrule through the CLI: the run the judge stopped is the run that reache
   const json = (...args) => { const r = run(...args, "--json"); return { ...r, v: JSON.parse(r.out) }; };
   const started = json("start", "close").v;
   assert.equal(json("check").v.state, "done");
-  assert.equal(json("next", "operator", "--because", "asked for a ruling").v.state, "operator");
+  assert.equal(json("next", "operator", "--because", "asked for a ruling", "--on", `${started.runId}.1`).v.state, "operator");
   assert.equal(run("start", "merge").code, 2, "what 842b's judge told the operator to run: refused then, refused now");
   assert.match(run("status").out, /rider overrule "<label>" --because "…"[^\n]*\(gate green\)/);
-  assert.equal(run("overrule", "gate green").code, 2);
-  const ruled = json("overrule", "gate green", "--because", "the in-place fix stands");
+  assert.equal(run("overrule", "gate green", "--on", started.runId).code, 2);
+  const ruled = json("overrule", "gate green", "--because", "the in-place fix stands", "--on", started.runId);
   assert.deepEqual([ruled.code, ruled.v.state, ruled.v.phase, ruled.v.runId], [0, "human", "merge", started.runId]);
   assert.deepEqual(json("status").v.transitions.map((t) => t.by ?? "judge"), ["judge", "operator"]);
   assert.match(run("--help").out, /rider overrule <label> --because/);

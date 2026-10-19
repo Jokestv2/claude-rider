@@ -18,8 +18,8 @@ function stoppedAtOperator(script = [done(GATE, { cost: 33 })], phase = "close")
   const binding = new FakeBinding({ script });
   const ctx = makeCtx({ root: p.root, binding });
   start(ctx, { phase });
-  check(ctx);
-  const stop = next(ctx, "operator", { because: "gate green, but the session fixed the Done record in place and asked whether that stands" });
+  const { key } = check(ctx);
+  const stop = next(ctx, "operator", { on: key, because: "gate green, but the session fixed the Done record in place and asked whether that stands" });
   return { p, binding, ctx, stop };
 }
 
@@ -33,7 +33,7 @@ test("842b: the ruling revives the stopped run, takes the edge, and the merge ch
     assert.deepEqual(status(ctx).lastRun.overrulable, ["gate green"]);
     assert.match(render("status", status(ctx)), /next, on the operator's word:\n\s+rider overrule/);
 
-    const r = overrule(ctx, "gate green", { because: "the in-place correction stands; close.md's BLOCKED rule is stricter than practice" });
+    const r = overrule(ctx, "gate green", { on: runId, because: "the in-place correction stands; close.md's BLOCKED rule is stricter than practice" });
     assert.deepEqual([r.state, r.phase, r.runId], ["human", "merge", runId], "the same run, not a fresh one");
     const run = ctx.loadRun();
     assert.equal(run.endedBy, undefined);
@@ -48,9 +48,9 @@ test("842b: the ruling revives the stopped run, takes the edge, and the merge ch
 });
 
 test("overrule into a session phase launches it like any edge", () => {
-  const { p, ctx, binding } = stoppedAtOperator([done("STATUS: planned — build pending\n<promise>X</promise>"), { statuses: ["running"] }], "plan");
+  const { p, ctx, binding, stop } = stoppedAtOperator([done("STATUS: planned — build pending\n<promise>X</promise>"), { statuses: ["running"] }], "plan");
   try {
-    const r = overrule(ctx, "planned", { because: "the plan is fine; the judge misread the evidence" });
+    const r = overrule(ctx, "planned", { on: stop.runId, because: "the plan is fine; the judge misread the evidence" });
     assert.deepEqual([r.state, r.phase], ["running", "build"]);
     assert.equal(binding.calls.filter((c) => c.call === "launch")[1].prompt, "BUILD PROMPT");
     assert.deepEqual(ctx.loadRun().visits, { plan: 1, build: 1 });
@@ -58,23 +58,23 @@ test("overrule into a session phase launches it like any edge", () => {
 });
 
 test("only a label that leaves for another phase, and only with the ruling in words", () => {
-  const { p, ctx } = stoppedAtOperator();
+  const { p, ctx, stop: { runId: on } } = stoppedAtOperator();
   try {
-    assert.match(overrule(ctx).error, /overrule needs a label — edges of close: gate green/);
-    assert.match(overrule(ctx, "blocked", { because: "x" }).error, /"blocked" is not an edge of close that leaves for another phase — legal: gate green/);
-    assert.match(overrule(ctx, "resume", { because: "x" }).error, /not an edge of close that leaves/);
-    assert.match(overrule(ctx, "toString", { because: "x" }).error, /not an edge of close that leaves/);
-    assert.match(overrule(ctx, "gate green").error, /overrule needs --because/);
-    assert.match(overrule(ctx, "gate green", { because: "  " }).error, /overrule needs --because/);
+    assert.match(overrule(ctx, undefined, { on }).error, /overrule needs a label — edges of close: gate green/);
+    assert.match(overrule(ctx, "blocked", { on, because: "x" }).error, /"blocked" is not an edge of close that leaves for another phase — legal: gate green/);
+    assert.match(overrule(ctx, "resume", { on, because: "x" }).error, /not an edge of close that leaves/);
+    assert.match(overrule(ctx, "toString", { on, because: "x" }).error, /not an edge of close that leaves/);
+    assert.match(overrule(ctx, "gate green", { on }).error, /overrule needs --because/);
+    assert.match(overrule(ctx, "gate green", { on, because: "  " }).error, /overrule needs --because/);
     assert.equal(ctx.loadRun(), null, "a refusal revives nothing");
     assert.equal(ctx.lastEndedRun().endedBy, "operator");
   } finally { p.cleanup(); }
 });
 
 test("a dry run previews the edge and changes nothing", () => {
-  const { p, ctx } = stoppedAtOperator();
+  const { p, ctx, stop } = stoppedAtOperator();
   try {
-    const d = overrule(ctx, "gate green", { because: "stands", dryRun: true });
+    const d = overrule(ctx, "gate green", { on: stop.runId, because: "stands", dryRun: true });
     assert.deepEqual([d.state, d.phase, d.human], ["dry-run", "merge", true]);
     assert.equal(ctx.loadRun(), null);
     assert.equal(ctx.lastEndedRun().transitions.length, 1);
@@ -86,19 +86,19 @@ test("nothing to overrule: an active run, no run, a reset, a finished run, a sto
   const clock = new FakeClock();
   const ctx = makeCtx({ root: p.root, clock, binding: new FakeBinding({ script: [{ statuses: ["running"] }, done(GATE)] }) });
   try {
-    assert.match(overrule(ctx, "gate green", { because: "x" }).error, /no ended run/);
-    start(ctx);
-    assert.match(overrule(ctx, "planned", { because: "x" }).error, /is active at phase plan — overrule revives a run that stopped at operator/);
-    reset(ctx);
-    assert.match(overrule(ctx, "planned", { because: "x" }).error, /ended by reset, not at operator/);
+    assert.match(overrule(ctx, "gate green", { on: "ab12", because: "x" }).error, /no ended run/);
+    const { runId } = start(ctx);
+    assert.match(overrule(ctx, "planned", { on: runId, because: "x" }).error, /is active at phase plan — overrule revives a run that stopped at operator/);
+    reset(ctx, { on: runId });
+    assert.match(overrule(ctx, "planned", { on: runId, because: "x" }).error, /ended by reset, not at operator/);
     assert.deepEqual(status(ctx).lastRun.overrulable, []);
     clock.t += 60_000; // records are named by start time: two runs started at one frozen instant would tie
-    start(ctx, { phase: "close" });
+    const closed = start(ctx, { phase: "close" });
     check(ctx);
-    next(ctx, "gate green", { because: "ok" });
+    next(ctx, "gate green", { on: status(ctx).key, because: "ok" });
     writeFileSync(join(p.root, "merged.flag"), "");
     check(ctx);
-    assert.match(overrule(ctx, "gate green", { because: "x" }).error, /ended by done, not at operator/);
+    assert.match(overrule(ctx, "gate green", { on: closed.runId, because: "x" }).error, /ended by done, not at operator/);
   } finally { p.cleanup(); }
 
   // The visit cap: nobody judged that stop, so there is no call to overrule — and the stop says so by
@@ -109,10 +109,10 @@ test("nothing to overrule: an active run, no run, a reset, a finished run, a sto
   try {
     start(qctx);
     check(qctx);
-    const capped = next(qctx, "retry", { because: "once more" });
+    const capped = next(qctx, "retry", { on: status(qctx).key, because: "once more" });
     assert.equal(capped.state, "operator");
     assert.equal(qctx.lastEndedRun().transitions.at(-1).by, "executor");
-    assert.match(overrule(qctx, "planned", { because: "x" }).error, /stopped by the executor, not by a judge's call \(visit cap: plan entered 2 times/);
+    assert.match(overrule(qctx, "planned", { on: capped.runId, because: "x" }).error, /stopped by the executor, not by a judge's call \(visit cap: plan entered 2 times/);
     assert.doesNotMatch(render("next", capped), /rider overrule/);
     assert.match(render("next", capped), /rider start \[phase\]/);
   } finally { q.cleanup(); }
@@ -124,7 +124,7 @@ test("entering a human phase names the rider and does not claim an exit code it 
   try {
     start(ctx, { phase: "close" });
     check(ctx);
-    const r = next(ctx, "gate green", { because: "ok" });
+    const r = next(ctx, "gate green", { on: status(ctx).key, because: "ok" });
     const out = render("next", r);
     assert.match(out, new RegExp(`^rider lemmaria/${r.runId} · phase merge is yours\\n`));
     assert.match(out, /check: test -f merged\.flag   \(not run yet: rider check runs it — the run ends when it exits 0\)/);
@@ -141,7 +141,7 @@ test("a note finds the run it is about: the active one, or the one the merge jus
     assert.match(note(ctx, "too early").error, /no run, active or ended/);
     start(ctx, { phase: "close" });
     check(ctx);
-    next(ctx, "gate green", { because: "ok" });
+    next(ctx, "gate green", { on: status(ctx).key, because: "ok" });
     assert.deepEqual([note(ctx, "drove 4 scenarios").ended, ctx.loadRun().notes.length], [false, 1]);
     writeFileSync(join(p.root, "merged.flag"), "");
     check(ctx);

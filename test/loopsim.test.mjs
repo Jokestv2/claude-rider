@@ -29,11 +29,11 @@ test("a green milestone: plan → build → close → merge, three transitions, 
   const t = sim([G("planned"), G("code green"), G("gate green")]);
   start(t.ctx);
   assert.equal(w(t.ctx).state, "done");
-  next(t.ctx, "planned", { because: "plan committed" });
+  next(t.ctx, "planned", { on: status(t.ctx).key, because: "plan committed" });
   assert.equal(w(t.ctx).state, "done");
-  next(t.ctx, "code green", { because: "tests green, tree clean" });
+  next(t.ctx, "code green", { on: status(t.ctx).key, because: "tests green, tree clean" });
   assert.equal(w(t.ctx).state, "done");
-  const h = next(t.ctx, "gate green", { because: "gate record closed" });
+  const h = next(t.ctx, "gate green", { on: status(t.ctx).key, because: "gate record closed" });
   assert.equal(h.state, "human");
   assert.equal(w(t.ctx).state, "human");
   const run = t.ctx.loadRun();
@@ -74,7 +74,7 @@ test("genuine silence is done with no status hint: the judge decides, the execut
   assert.equal(r.statusHint, null);
   assert.match(r.doneReason, /no STATUS line/);
   assert.equal(t.binding.calls.filter((c) => c.call === "resume").length, 0);
-  assert.equal(next(t.ctx, "operator", { because: "no STATUS line and nothing in the tree" }).state, "operator");
+  assert.equal(next(t.ctx, "operator", { on: status(t.ctx).key, because: "no STATUS line and nothing in the tree" }).state, "operator");
   t.p.cleanup();
 });
 
@@ -82,11 +82,11 @@ test("BLOCKED mid-chain stops the run for the operator; closing is never reached
   const t = sim([G("planned"), BLOCKED, G("gate green")]);
   start(t.ctx);
   w(t.ctx);
-  next(t.ctx, "planned", { because: "ok" });
+  next(t.ctx, "planned", { on: status(t.ctx).key, because: "ok" });
   const r = w(t.ctx);
   assert.equal(r.state, "done");
   assert.match(r.statusHint, /BLOCKED/);
-  assert.equal(next(t.ctx, "blocked", { because: r.statusHint }).state, "operator");
+  assert.equal(next(t.ctx, "blocked", { on: status(t.ctx).key, because: r.statusHint }).state, "operator");
   assert.equal(t.binding.calls.filter((c) => c.call === "launch").length, 2);
   assert.equal(t.ctx.lastEndedRun().reason, "STATUS: BLOCKED - design change needed: X");
   t.p.cleanup();
@@ -96,9 +96,9 @@ test("a killed build session is resumed under the same id and the chain carries 
   const t = sim([G("planned"), { statuses: ["gone"] }, { statuses: ["done"], read: { lastText: "STATUS: code green\n<promise>M</promise>", cost: 7, turns: 12 } }]);
   start(t.ctx);
   w(t.ctx);
-  next(t.ctx, "planned", { because: "ok" });
+  next(t.ctx, "planned", { on: status(t.ctx).key, because: "ok" });
   assert.equal(w(t.ctx).state, "gone");
-  assert.equal(next(t.ctx, "resume", { because: "killed; transcript intact" }).state, "running");
+  assert.equal(next(t.ctx, "resume", { on: status(t.ctx).key, because: "killed; transcript intact" }).state, "running");
   assert.equal(w(t.ctx).state, "done");
   const s = t.ctx.loadRun().sessions;
   assert.deepEqual([s[1].id, s[2].id, s[2].resumedFrom, s[2].resumeReason], ["sess-2", "sess-2", "sess-2", "killed; transcript intact"]);

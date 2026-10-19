@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { awaitEvent, watchLoop } from "../scripts/lib/watch.mjs";
-import { next, start } from "../scripts/lib/verbs.mjs";
+import { next, start, status } from "../scripts/lib/verbs.mjs";
 import { FakeBinding } from "./fake-binding.mjs";
 import { FakeClock, limitSoon, makeCtx, save, tmpProject, wake } from "./helpers.mjs";
 
@@ -140,7 +140,7 @@ test("no terminal event for a stretch the run moved past between the watcher's c
   t.ctx.update = (fn) => {
     if (!decided && judge.loadRun().sessions[0].outcome === "done") {
       decided = true;
-      assert.equal(next(judge, "planned", { because: "plan committed" }).phase, "build");
+      assert.equal(next(judge, "planned", { on: status(judge).key, because: "plan committed" }).phase, "build");
     }
     return update(fn);
   };

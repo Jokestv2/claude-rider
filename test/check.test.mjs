@@ -207,7 +207,7 @@ test("after a resume the nudge is dropped by identity, not by position", () => {
     // The operator typed in this stretch, so it reads intervened over its rate-limited outcome.
     const first = settled(check, ctx);
     assert.deepEqual([first.state, first.outcome], ["intervened", "rate-limited"]);
-    resume(ctx, { reason: "rate-limit" });
+    resume(ctx, { on: first.key, reason: "rate-limit" });
     const r = check(ctx);
     assert.equal(r.resumes, 1);
     assert.equal(r.humanTurns, 1, "launch and one nudge subtracted from three counted turns");
@@ -372,11 +372,11 @@ test("the work tip travels with the work branch, follows it at the human phase, 
   try {
     start(ctx, { phase: "close" });
     head = "feature/v1";
-    check(ctx);
+    const { key } = check(ctx);
     assert.equal(ctx.loadRun().workTip, "aaa1");
     assert.equal(ctx.shellOpts(ctx.loadRun()).env.RIDER_WORK_TIP, "aaa1");
 
-    next(ctx, "gate green", { because: "gate record closed" });
+    next(ctx, "gate green", { on: key, because: "gate record closed" });
     assert.deepEqual(ctx.loadRun().handoff, { phase: "merge", at: ctx.loadRun().handoff.at, tip: "aaa1" });
 
     // The operator fixes something on the branch during gate review: the tip to merge moves with it.

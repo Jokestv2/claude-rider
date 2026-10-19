@@ -37,7 +37,7 @@ test("two instances run independently: separate state, events, runs and watchers
 
   const bVersion = stateOf("b").version;
   assert.equal(check(a).state, "done");
-  assert.equal(next(a, "planned", { because: "ok" }).phase, "build");
+  assert.equal(next(a, "planned", { on: `${ra.runId}.1`, because: "ok" }).phase, "build");
   assert.equal(stateOf("b").version, bVersion, "a's check and next do not write b");
   assert.equal(stateOf("b").run.phase, "plan");
   assert.deepEqual(spawned, { a: 2, b: 1 });
@@ -53,7 +53,7 @@ test("two instances run independently: separate state, events, runs and watchers
   assert.ok(b.readEvents().every((e) => e.instance === "b"));
 
   // Ending a's run files its record under a only; b's run is still active.
-  assert.equal(reset(a).ok, true);
+  assert.equal(reset(a, { on: ra.runId }).ok, true);
   assert.equal(readdirSync(a.paths.runs).length, 1);
   assert.equal(existsSync(b.paths.runs), false);
   assert.equal(b.loadRun().runId, rb.runId);
