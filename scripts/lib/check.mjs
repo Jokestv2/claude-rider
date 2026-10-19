@@ -224,7 +224,7 @@ function checkHuman(ctx, run, def) {
     return { state: "none", ended: { runId: run.runId, phase: run.phase, reason }, lastRun: run };
   }
   // The check runs inside the hold, since its exit decides whether the run ends; `show` only informs (`readouts`).
-  return { state: "human", rider: run.rider, runId: run.runId, key: null, phase: run.phase, check: def.check, checkExit: r.status, checkOutput: r.output, show: null, notes: run.notes, totalCost: totalCost(run), ...driftOf(run), [RUN]: run };
+  return { state: "human", rider: run.rider, instance: ctx.instance.id, runId: run.runId, key: null, phase: run.phase, check: def.check, checkExit: r.status, checkOutput: r.output, show: null, notes: run.notes, totalCost: totalCost(run), ...driftOf(run), [RUN]: run };
 }
 
 /** Gate precision, mechanically: the commits that landed after the sessions handed over — every one is
@@ -255,7 +255,7 @@ function result(ctx, run, sess, outcome, finalText, note = null) {
   const labels = legalLabels(ctx.rider, run.phase);
   return {
     state, outcome, note,
-    rider: run.rider, runId: run.runId, key, phase: run.phase, visit: run.visits[run.phase] ?? 1,
+    rider: run.rider, instance: ctx.instance.id, runId: run.runId, key, phase: run.phase, visit: run.visits[run.phase] ?? 1,
     session: { id: sess.id, shortId: sess.shortId, model: sess.model, at: sess.at, resumedFrom: sess.resumedFrom ?? null },
     attach: ctx.binding.attachHint(ids),
     statusHint: sess.statusHint ?? statusHint(finalText),

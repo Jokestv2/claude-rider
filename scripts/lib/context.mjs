@@ -10,7 +10,7 @@ import { sleepSync } from "./proc.mjs";
 
 /** Everything a verb needs for one instance, behind one object so tests can inject a clock, a sleep and a binding.
  *  It is also the instance's only writer (§7.1): every write asserts that `update` holds the instance's lock. */
-export function createContext({ rider, instance, root, local, binding, now = () => new Date(), sleep = sleepSync, spawnWatcher = null, watcherAlive: aliveFn = null, killWatcher: killFn = null, lock = {}, riderCount = 1 }) {
+export function createContext({ rider, instance, root, local, binding, now = () => new Date(), sleep = sleepSync, spawnWatcher = null, watcherAlive: aliveFn = null, killWatcher: killFn = null, lock = {}, riderCount = 1, rollRunId = undefined }) {
   const paths = instancePaths(root, rider.name, instance.id);
   const shell = resolveShell(local);
   let depth = 0;
@@ -30,7 +30,7 @@ export function createContext({ rider, instance, root, local, binding, now = () 
     return rest.length ? summary(readJson(join(paths.runs, rest.at(-1)))) : null;
   };
   const ctx = {
-    rider, instance, root, paths, local, binding, now, sleep, riderCount,
+    rider, instance, root, paths, local, binding, now, sleep, riderCount, rollRunId,
     /** One hold per verb. Reentrant through the depth count: a verb that calls another (next → resume, start →
      *  enterPhase → ensureWatcher) must not wait on the lock it already holds. The hold's events are appended after
      *  `fn` returns and before the lock is let go, so they follow every write they record (§7.1); a throw drops them. */
@@ -74,6 +74,15 @@ export function createContext({ rider, instance, root, local, binding, now = () 
       return run;
     },
     lastEndedRun() { const last = read().lastRun; return last ? readJson(endedRunPath(paths, last), null) : null; },
+    /** Every run id the instance has used: the active run's, the last run's, and each record's in runs/, read from its
+     *  file name (`endedRunPath`) so no record is parsed. */
+    runIdsInUse() {
+      const { run, lastRun } = read();
+      let files = [];
+      try { files = readdirSync(paths.runs); } catch (e) { if (e.code !== "ENOENT") throw e; }
+      const named = files.map((f) => /-([0-9a-f]{4})\.json$/.exec(f)?.[1]);
+      return new Set([run?.runId, lastRun?.runId, ...named].filter(Boolean));
+    },
     /** Rewrite an ended run's record in place: a note that arrives after the run ended still belongs to it. */
     saveEndedRun(run) {
       locked("saveEndedRun");
@@ -98,10 +107,11 @@ export function createContext({ rider, instance, root, local, binding, now = () 
       return run;
     },
     /** Queued, in hold order, and written when the hold commits: a record event says a write happened (§6.2), so a
-     *  hold that throws leaves none. Returns the event, whose `seq` is filled in when it lands. */
-    event(kind, { runId = null, phase = null, key = null, text = "" } = {}) {
+     *  hold that throws leaves none. Returns the event, whose `seq` is filled in when it lands. `by` is carried only by
+     *  the events that pass one (`refused`). */
+    event(kind, { runId = null, phase = null, key = null, text = "", by = null } = {}) {
       locked(`event ${kind}`);
-      const e = { seq: null, at: now().toISOString(), rider: paths.rider, instance: paths.instance, runId, kind, phase, key, text };
+      const e = { seq: null, at: now().toISOString(), rider: paths.rider, instance: paths.instance, runId, kind, phase, key, text, ...(by ? { by } : {}) };
       queue.push(e);
       return e;
     },

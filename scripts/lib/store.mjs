@@ -72,11 +72,11 @@ function parseEvents(text) {
 }
 /** Called under the lock, so the highest seq on file is the last one assigned. One appendFileSync of one whole
  *  line keeps a concurrent lock-free reader from seeing half an event; a torn line before it is closed off first. */
-export function appendEvent(paths, { runId = null, kind, phase = null, key = null, text = "" }, now) {
+export function appendEvent(paths, { runId = null, kind, phase = null, key = null, text = "", by = null }, now) {
   mkdirSync(paths.dir, { recursive: true });
   const prior = existsSync(paths.events) ? readFileSync(paths.events, "utf8") : "";
   const seq = parseEvents(prior).reduce((max, e) => (Number.isInteger(e.seq) && e.seq > max ? e.seq : max), 0) + 1;
-  const event = { seq, at: now.toISOString(), rider: paths.rider, instance: paths.instance, runId, kind, phase, key, text };
+  const event = { seq, at: now.toISOString(), rider: paths.rider, instance: paths.instance, runId, kind, phase, key, text, ...(by ? { by } : {}) };
   appendFileSync(paths.events, `${prior && !prior.endsWith("\n") ? "\n" : ""}${JSON.stringify(event)}\n`);
   return event;
 }

@@ -7,8 +7,15 @@ import { readJson, writeJsonAtomic } from "./store.mjs";
 export function loadLocal(rp) {
   return { maxWaitHours: 6, pollSeconds: 30, models: {}, advisor: null, launchArgs: [], claudePath: null, shell: null, permissionMode: "auto", staleDecisionMinutes: 20, ...readJson(rp.local, {}) };
 }
-export function newRun({ rider, phase, baseBranch, now }) {
-  return { rider, runId: randomBytes(2).toString("hex"), startedAt: now.toISOString(), baseBranch: baseBranch ?? null, phase, visits: {}, transitions: [], sessions: [], notes: [] };
+/** A run id is unique within its instance (§5): one reused would let a stale key `<runId>.<n>` match another run's
+ *  stretch. Four hex digits collide often enough over an instance's life, so `taken` (the ids on file) is re-rolled past. */
+export function newRun({ rider, phase, baseBranch, now, taken = new Set(), roll = () => randomBytes(2).toString("hex") }) {
+  let runId = roll();
+  for (let i = 1; taken.has(runId); i++) {
+    if (i >= 1000) throw new Error(`no unused run id after ${i} tries (${taken.size} in use)`);
+    runId = roll();
+  }
+  return { rider, runId, startedAt: now.toISOString(), baseBranch: baseBranch ?? null, phase, visits: {}, transitions: [], sessions: [], notes: [] };
 }
 /** An instance's directory relative to the project root (§11), in one place: `$RIDER_SCOPE` and the pathspec that
  *  scopes gate precision must never disagree. No instance is a rider without `instances`, scoped to the root. */

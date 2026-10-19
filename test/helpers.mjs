@@ -99,13 +99,13 @@ export function settled(check, ctx, max = 5) {
 }
 
 /** A context on one instance of the test rider: `instance` names one of its declared instances, or null for `default`. */
-export function makeCtx({ root, name = "lemmaria", instance = null, binding, clock = new FakeClock(), local = {}, spawnWatcher = () => false, watcherAlive = () => null, killWatcher = () => {}, lock = {}, riderCount = 1 }) {
+export function makeCtx({ root, name = "lemmaria", instance = null, binding, clock = new FakeClock(), local = {}, spawnWatcher = () => false, watcherAlive = () => null, killWatcher = () => {}, lock = {}, riderCount = 1, rollRunId = undefined }) {
   const rider = loadRider(join(root, "riders", name, "RIDER.md"));
   const { declared, instances } = listInstances(root, rider);
   const id = instance ?? "default";
   const found = instances.find((i) => i.id === id);
   if (!found) throw new Error(`makeCtx: ${rider.name} has no instance ${id}; have: ${instances.map((i) => i.id).join(", ") || "none"}`);
-  return createContext({ rider, instance: { ...found, declared }, root, local: { ...loadLocal(riderPaths(root, rider.name)), ...local }, binding, now: clock.now, sleep: clock.sleep, spawnWatcher, watcherAlive, killWatcher, lock, riderCount });
+  return createContext({ rider, instance: { ...found, declared }, root, local: { ...loadLocal(riderPaths(root, rider.name)), ...local }, binding, now: clock.now, sleep: clock.sleep, spawnWatcher, watcherAlive, killWatcher, lock, riderCount, rollRunId });
 }
 
 /** A run edited by hand is written the way every writer writes: under the instance lock. */

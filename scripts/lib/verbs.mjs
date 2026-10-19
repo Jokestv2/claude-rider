@@ -10,8 +10,8 @@ export function refuse(error) { return { ok: false, error }; }
 
 /** §8: a decision names what it judged, and that is checked inside the hold before anything else. A missing or malformed
  *  key is a usage error and leaves no trace. A stale one is refused with the state it missed and recorded as `refused`,
- *  except under --dry-run, which runs nothing. Null when the key is the instance's current one. */
-function keyRefusal(ctx, verb, on, { dryRun = false } = {}) {
+ *  naming who sent it (`by`), except under --dry-run, which runs nothing. Null when the key is the instance's current one. */
+function keyRefusal(ctx, verb, on, { dryRun = false, by } = {}) {
   const stretch = verb === "next" || verb === "resume";
   const k = stretch ? parseStretchKey(on) : parseRunKey(on);
   if (!k) {
@@ -26,7 +26,7 @@ function keyRefusal(ctx, verb, on, { dryRun = false } = {}) {
   const current = snapshot(state, ctx.rider, ended);
   const error = `${reason}; now ${nowLine(current)}`;
   // On the timeline of the run it judged, at the phase the instance had reached.
-  if (!dryRun) ctx.event("refused", { runId: stretch ? k.runId : k, phase: current.phase, key: on, text: error });
+  if (!dryRun) ctx.event("refused", { runId: stretch ? k.runId : k, phase: current.phase, key: on, text: error, by });
   return { ok: false, stale: true, error, current };
 }
 
@@ -81,7 +81,7 @@ export function start(ctx, { phase = null, dryRun = false } = {}) {
       const r = sh(cmd, ctx.shellOpts({ phase: target, baseBranch }));
       if (r.status !== 0) return refuse(`intake check failed (exit ${r.status}): ${cmd}${r.output ? `\n${r.output}` : ""}`);
     }
-    const run = newRun({ rider: ctx.rider.name, phase: target, baseBranch, now: ctx.now() });
+    const run = newRun({ rider: ctx.rider.name, phase: target, baseBranch, now: ctx.now(), taken: ctx.runIdsInUse(), roll: ctx.rollRunId });
     if (!dryRun) ctx.event("run-started", { runId: run.runId, phase: target });
     return enterPhase(ctx, run, target, { dryRun });
   }));
@@ -111,7 +111,7 @@ export function enterPhase(ctx, run, phase, { dryRun = false } = {}) {
     ctx.saveRun(run);
     ctx.event("phase-entered", { runId: run.runId, phase, text: `visit ${run.visits[phase]} · human: ${def.check}` });
     // No `checkExit`: the check has not run yet, and `rider check` is what runs it. `show` runs after the lock (`readouts`).
-    return { ok: true, state: "human", rider: run.rider, runId: run.runId, phase, check: def.check, show: null, notes: run.notes, totalCost: totalCost(run), [RUN]: run };
+    return { ok: true, state: "human", rider: run.rider, instance: ctx.instance.id, runId: run.runId, phase, check: def.check, show: null, notes: run.notes, totalCost: totalCost(run), [RUN]: run };
   }
   const prompt = readFileSync(def.prompt, "utf8");
   const model = ctx.local.models?.[phase] ?? def.model;
@@ -138,7 +138,7 @@ export function enterPhase(ctx, run, phase, { dryRun = false } = {}) {
 /** The judge's decision: a label from the current phase's edges (§4.3), or the two reserved ones. */
 export function next(ctx, label, { on, because = null, by = "judge", dryRun = false } = {}) {
   return readouts(ctx, ctx.update(() => {
-    const refused = keyRefusal(ctx, "next", on, { dryRun });
+    const refused = keyRefusal(ctx, "next", on, { dryRun, by });
     if (refused) return refused;
     // The key matched, so the run is active and its phase has a session: a human phase has no key to match.
     const run = ctx.loadRun();
@@ -168,7 +168,7 @@ export function next(ctx, label, { on, because = null, by = "judge", dryRun = fa
  *  `by: "operator"`: the pair is one judge call and its review, which is what the record is read for. */
 export function overrule(ctx, label, { on, because, dryRun = false } = {}) {
   return readouts(ctx, ctx.update(() => {
-    const refused = keyRefusal(ctx, "overrule", on, { dryRun });
+    const refused = keyRefusal(ctx, "overrule", on, { dryRun, by: "operator" });
     if (refused) return refused;
     const run = ctx.lastEndedRun();
     if (!run) return refuse("no ended run — nothing to overrule");
@@ -195,7 +195,7 @@ export function overrule(ctx, label, { on, because, dryRun = false } = {}) {
  *  so a competing resume shows as the latest decision. `reason` is the session's resumeReason: the watcher's is `rate-limit`. */
 export function resume(ctx, { on, because = null, by = "judge", reason = null, dryRun = false } = {}) {
   return ctx.update(() => {
-    const refused = keyRefusal(ctx, "resume", on, { dryRun });
+    const refused = keyRefusal(ctx, "resume", on, { dryRun, by });
     if (refused) return refused;
     const run = ctx.loadRun();
     const def = ctx.rider.phases[run.phase];
@@ -267,7 +267,7 @@ export function note(ctx, text) {
 /** Forget the active run (its record is kept under runs/); the project's own state is the truth. */
 export function reset(ctx, { on, because = null, by = "judge" } = {}) {
   return ctx.update(() => {
-    const refused = keyRefusal(ctx, "reset", on);
+    const refused = keyRefusal(ctx, "reset", on, { by });
     if (refused) return refused;
     const run = ctx.loadRun();
     ctx.killWatcher();

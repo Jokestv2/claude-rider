@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { check } from "../scripts/lib/check.mjs";
 import { render, renderCheck } from "../scripts/lib/render.mjs";
-import { next, overrule, reset, resume, start } from "../scripts/lib/verbs.mjs";
+import { next, overrule, reset, resume, start, status } from "../scripts/lib/verbs.mjs";
 import { watchLoop } from "../scripts/lib/watch.mjs";
 import { main, parseCli } from "../scripts/rider.mjs";
 import { FakeBinding } from "./fake-binding.mjs";
@@ -39,7 +39,7 @@ test("the stale decision of §8 is refused, names the new phase and the other ac
   assert.equal(late.current.key, `${r}.2`);
   const events = judge.readEvents();
   assert.equal(events.length, before + 1);
-  assert.deepEqual([events.at(-1).kind, events.at(-1).runId, events.at(-1).phase, events.at(-1).key, events.at(-1).text], ["refused", r, "build", `${r}.1`, late.error], "on the judged run's timeline, at the phase it reached");
+  assert.deepEqual([events.at(-1).kind, events.at(-1).runId, events.at(-1).phase, events.at(-1).key, events.at(-1).text, events.at(-1).by], ["refused", r, "build", `${r}.1`, late.error, "judge"], "on the judged run's timeline, at the phase it reached, naming who sent it");
   const run = judge.loadRun();
   assert.deepEqual([run.phase, run.transitions.length, run.sessions.length], ["build", 1, 2], "nothing moved");
   assert.equal(render("next", late), `refused: ${late.error}\nnow: phase build · run ${r} · latest ${r}.2 (done) · last: plan —planned→ build by operator: the plan stands`);
@@ -73,10 +73,10 @@ test("resume, overrule and reset refuse a stale key", (t) => {
   t.after(p.cleanup);
   const binding = new FakeBinding({ script: [done("planned"), done("BLOCKED — x")] });
   const ctx = makeCtx({ root: p.root, binding });
-  const refused = (res, key) => {
+  const refused = (res, key, by) => {
     assert.deepEqual([res.ok, res.stale], [false, true], res.error);
     const e = ctx.readEvents().at(-1);
-    assert.deepEqual([e.kind, e.runId, e.key, e.text], ["refused", key.split(".")[0], key, res.error]);
+    assert.deepEqual([e.kind, e.runId, e.key, e.text, e.by], ["refused", key.split(".")[0], key, res.error, by]);
   };
   const { runId: r } = start(ctx);
   check(ctx);
@@ -85,18 +85,19 @@ test("resume, overrule and reset refuse a stale key", (t) => {
   const quiet = ctx.readEvents().length;
   assert.deepEqual([next(ctx, "blocked", { on: `${r}.1`, dryRun: true }).stale, ctx.readEvents().length], [true, quiet]);
   // resume: plan's stretch, once the run has gone on to build.
-  refused(resume(ctx, { on: `${r}.1` }), `${r}.1`);
+  refused(resume(ctx, { on: `${r}.1` }), `${r}.1`, "judge");
   assert.equal(binding.calls.filter((c) => c.call === "resume").length, 0, "a refused resume reaches no session");
   // reset: a run that is not the active one.
-  refused(reset(ctx, { on: otherThan(r) }), otherThan(r));
+  refused(reset(ctx, { on: otherThan(r), by: "operator" }), otherThan(r), "operator");
   assert.equal(ctx.loadRun().runId, r, "the run is still active");
   check(ctx);
   assert.equal(next(ctx, "blocked", { on: `${r}.2`, because: "BLOCKED — x" }).state, "operator");
   // overrule: a run that is not the last ended one.
-  refused(overrule(ctx, "code green", { on: otherThan(r), because: "x" }), otherThan(r));
+  // overrule takes no --by: it is always the operator's ruling.
+  refused(overrule(ctx, "code green", { on: otherThan(r), because: "x" }), otherThan(r), "operator");
   assert.equal(ctx.loadRun(), null, "nothing was revived");
   // reset with no active run: the run it names has ended (the controller's ruling on §8's table).
-  refused(reset(ctx, { on: r }), r);
+  refused(reset(ctx, { on: r }), r, "judge");
 });
 
 test("a missing or malformed --on is a usage refusal with no event", (t) => {
@@ -186,6 +187,9 @@ test("check prints the exact decide-with line", (t) => {
   assert.equal(c.key, `${r}.1`);
   assert.equal(c.decideWith, 'decide with:  rider next <label> --on ' + `${r}.1` + ' --because "…"     (labels: planned · blocked · resume · operator)');
   assert.equal(renderCheck(c).split("\n").at(-1), c.decideWith, "the last line of the block");
+  assert.equal(c.instance, "default");
+  assert.match(renderCheck(c), new RegExp(`^rider lemmaria/default/${r} · phase plan · `));
+  assert.match(render("status", status(ctx)), new RegExp(`^rider lemmaria/default/${r} · phase plan \\(visit 1\\) · stretch ${r}\\.1 · `));
 
   // Several riders and a rider that declares instances: the line carries both flags, so it can be copied verbatim.
   const q = tmpProject({ riderMd: INSTANCE_RIDER_MD, instances: ["a"] });
@@ -194,6 +198,7 @@ test("check prints the exact decide-with line", (t) => {
   const { runId: s } = start(a);
   const ca = check(a);
   assert.ok(ca.decideWith.includes(` --rider lemmaria --instance a --on ${s}.1 `), ca.decideWith);
+  assert.match(renderCheck(ca), new RegExp(`^rider lemmaria/a/${s} · phase plan · `));
 });
 
 test("the watcher's resume after the run moved on is refused, and the watcher goes back to what the run now runs", (t) => {
@@ -224,7 +229,7 @@ test("the watcher's resume after the run moved on is refused, and the watcher go
   assert.deepEqual(logs.slice(-2), ["the run moved on while waiting; watching its current stretch", "nothing to watch (none)"]);
   assert.deepEqual(wake(watcher), [], "no wake event for a stretch the judge already decided");
   const last = watcher.readEvents().at(-1);
-  assert.deepEqual([last.kind, last.runId, last.phase, last.key], ["refused", r, null, `${r}.1`], "the watcher's refused resume is on file like any other");
+  assert.deepEqual([last.kind, last.runId, last.phase, last.key, last.by], ["refused", r, null, `${r}.1`, "executor"], "the watcher's refused resume is on file like any other, as the executor's");
 });
 
 test("a reset between the watcher's check and its wait ends the watch at its next tick", (t) => {

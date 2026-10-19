@@ -2,6 +2,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readdirSync } from "node:fs";
+import { newRun } from "../scripts/lib/state.mjs";
+import { endedRunPath, writeJsonAtomic, writeState } from "../scripts/lib/store.mjs";
 import { start } from "../scripts/lib/verbs.mjs";
 import { FakeBinding } from "./fake-binding.mjs";
 import { FACT_A, INSTANCE_RIDER_MD, TEST_RIDER_MD, makeCtx, tmpProject } from "./helpers.mjs";
@@ -110,4 +112,29 @@ test("a launch failure ends the run at operator with the reason", () => {
   assert.equal(readdirSync(ctx.paths.runs).length, 1);
   assert.equal(ctx.lastEndedRun().endedBy, "operator");
   p.cleanup();
+});
+
+test("a new run's id is none the instance has used: re-rolled past the last run and every ended run on file", () => {
+  // §5: a run id is unique within the instance. A reused one would let a stale key (`<runId>.<n>`) match a stretch
+  // of a different run.
+  const p = tmpProject();
+  try {
+    const rolls = ["aaaa", "bbbb", "cccc", "dddd"];
+    const ctx = makeCtx({ root: p.root, binding: new FakeBinding({ script: [{ statuses: ["running"] }] }), rollRunId: () => rolls.shift() });
+    const at = (min) => new Date(Date.UTC(2026, 8, 1, 10, min)).toISOString();
+    // aaaa is only in runs/ (a record whose summary another run's end replaced); bbbb is only the last run's summary.
+    writeJsonAtomic(endedRunPath(ctx.paths, { runId: "aaaa", startedAt: at(0) }), { runId: "aaaa", startedAt: at(0) });
+    ctx.update(() => { const state = ctx.readState(); state.lastRun = { runId: "bbbb", phase: "plan", startedAt: at(5), endedAt: at(6), endedBy: "reset", reason: null, totalCost: 0, overrulable: [] }; writeState(ctx.paths, state, new Date()); });
+    assert.deepEqual([...ctx.runIdsInUse()].sort(), ["aaaa", "bbbb"]);
+    assert.equal(start(ctx).runId, "cccc");
+    assert.deepEqual(rolls, ["dddd"], "three rolls: two collisions, then a free id");
+    assert.equal(ctx.runIdsInUse().has("cccc"), true, "the active run's id is in use too");
+  } finally { p.cleanup(); }
+});
+
+test("newRun re-rolls an id it was told is taken", () => {
+  const rolls = ["0001", "0001", "0002"];
+  const run = newRun({ rider: "lemmaria", phase: "plan", baseBranch: "main", now: new Date(), taken: new Set(["0001"]), roll: () => rolls.shift() });
+  assert.equal(run.runId, "0002");
+  assert.throws(() => newRun({ rider: "lemmaria", phase: "plan", baseBranch: "main", now: new Date(), taken: new Set(["0001"]), roll: () => "0001" }), /no unused run id/);
 });

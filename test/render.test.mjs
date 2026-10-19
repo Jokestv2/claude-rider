@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { eventLine, render, renderCheck } from "../scripts/lib/render.mjs";
 
 const done = {
-  state: "done", outcome: "done", note: null, rider: "lemmaria", runId: "3f2a", phase: "build", visit: 1,
+  state: "done", outcome: "done", note: null, rider: "lemmaria", instance: "a", runId: "3f2a", phase: "build", visit: 1,
   session: { id: "full", shortId: "ce34947e", model: "opus", at: "2026-09-03T10:00:00.000Z", resumedFrom: "full" },
   attach: "claude attach ce34947e   (or ← for agents)", statusHint: "STATUS: code green — gate record pending", doneReason: null,
   resumes: 1, lastResume: { reason: "rate-limit", at: "2026-09-03T20:19:00.000Z" }, rateLimit: null, humanTurns: 0, cost: 112.47, turns: 196, elapsedMs: 3_600_000,
@@ -16,7 +16,8 @@ const done = {
 test("the check block has the §4.4 shape", () => {
   const out = render("check", done);
   const lines = out.split("\n");
-  assert.equal(lines[0], "rider lemmaria/3f2a · phase build · visit 1 · session ce34947e (claude attach ce34947e   (or ← for agents))");
+  // One form throughout, as event lines and session names spell it: rider/instance/runId (`default` for a rider without instances).
+  assert.equal(lines[0], "rider lemmaria/a/3f2a · phase build · visit 1 · session ce34947e (claude attach ce34947e   (or ← for agents))");
   assert.match(lines[1], /^state: done\s+\(running \| done \| waiting \| gone \| rate-limited \| intervened\)$/);
   assert.match(out, /status hint: STATUS: code green — gate record pending/);
   assert.match(out, /resumes: 1 \(rate-limit, 2026-09-03T20:19:00.000Z\)   human turns after launch: 0   cost this stretch: \$112.47   turns: 196/);
@@ -27,7 +28,7 @@ test("the check block has the §4.4 shape", () => {
 
 // A stopped session with a human turn in it: the shape the `── human turns ──` section renders from.
 const base = {
-  rider: "lemmaria", runId: "c84c", phase: "build", visit: 1,
+  rider: "lemmaria", instance: "default", runId: "c84c", phase: "build", visit: 1,
   session: { shortId: "4c511ecd" }, attach: "claude attach 4c511ecd",
   state: "intervened", statusHint: "STATUS: code green", resumes: 0,
   cost: 52.43, turns: 433, elapsedMs: 4_860_000, finalText: "done.", labels: [],
@@ -84,17 +85,24 @@ test("state none keeps the verb's own message and error", () => {
 });
 
 test("running, none, human and refusal render short", () => {
-  assert.match(render("check", { ...done, state: "running", outcome: "running", evidence: [] }), /^rider lemmaria\/3f2a[^\n]*\nstate: running/);
+  assert.match(render("check", { ...done, state: "running", outcome: "running", evidence: [] }), /^rider lemmaria\/a\/3f2a[^\n]*\nstate: running/);
   assert.equal(render("check", { ...done, state: "running", outcome: "running", evidence: [] }).includes("legal labels"), false);
   assert.match(render("check", { state: "none", lastRun: { runId: "ab12", phase: "plan", endedBy: "operator", reason: "BLOCKED: x" } }), /no active run\nlast run ab12 ended at operator \(phase plan\): BLOCKED: x/);
-  assert.match(render("check", { state: "human", rider: "lemmaria", runId: "3f2a", phase: "merge", check: "git merge-base --is-ancestor HEAD main", checkExit: 1, checkOutput: "", show: "3 files changed", notes: [], totalCost: 187 }), /phase merge is yours[\s\S]*check: git merge-base[\s\S]*3 files changed[\s\S]*total cost: \$187\.00/);
+  assert.match(render("check", { state: "human", rider: "lemmaria", instance: "a", runId: "3f2a", phase: "merge", check: "git merge-base --is-ancestor HEAD main", checkExit: 1, checkOutput: "", show: "3 files changed", notes: [], totalCost: 187 }), /^rider lemmaria\/a\/3f2a · phase merge is yours[\s\S]*check: git merge-base[\s\S]*3 files changed[\s\S]*total cost: \$187\.00/);
   assert.equal(render("next", { ok: false, error: "nope" }), "refused: nope");
-  assert.match(render("status", { ok: true, state: "none", rider: "lemmaria", watcher: null, lastEvent: null, lastRun: null }), /^rider lemmaria · no active run/);
+  assert.match(render("status", { ok: true, state: "none", rider: "lemmaria", instance: "a", watcher: null, lastEvent: null, lastRun: null }), /^rider lemmaria\/a · no active run/);
   assert.match(render("await", { ok: false, state: "timeout", minutes: 60 }), /no event in 60 min/);
 });
 
+test("status names the instance and the current stretch in its first line", () => {
+  const st = { rider: "lemmaria", instance: "a", runId: "c84c", key: "c84c.2", phase: "build", visits: { build: 1 }, startedAt: "2026-09-06T06:37:37.845Z", state: "finished", watcher: null, sessions: [], totalCost: 0, baseBranch: "main" };
+  assert.equal(render("status", st).split("\n")[0], "rider lemmaria/a/c84c · phase build (visit 1) · stretch c84c.2 · branch main · started 2026-09-06T06:37:37.845Z");
+  // A human phase has no stretch to name.
+  assert.equal(render("status", { ...st, state: "human", key: null }).split("\n")[0], "rider lemmaria/a/c84c · phase build (visit 1) · branch main · started 2026-09-06T06:37:37.845Z");
+});
+
 test("status renders both branches, and a run with no base", () => {
-  const base = { rider: "lemmaria", runId: "c84c", phase: "build", visits: { build: 1 }, startedAt: "2026-09-06T06:37:37.845Z", state: "running", watcher: 33268, sessions: [], totalCost: 0 };
+  const base = { rider: "lemmaria", instance: "default", runId: "c84c", phase: "build", visits: { build: 1 }, startedAt: "2026-09-06T06:37:37.845Z", state: "running", watcher: 33268, sessions: [], totalCost: 0 };
   assert.match(render("status", { ...base, baseBranch: "main", workBranch: "feature/r4-grounding" }), /· base main → work feature\/r4-grounding ·/);
   assert.match(render("status", { ...base, baseBranch: "main", workBranch: null }), /· branch main ·/);
   // The legacy `branch` field is no longer read (§15): only `baseBranch` names the base.
@@ -108,6 +116,6 @@ test("an event renders as one line: at, kind, rider/instance/runId, phase, key, 
   // Absent fields are left out, an unknown run reads "?", and a multi-line text stays on its line.
   assert.equal(eventLine({ ...e, kind: "watcher-stopped", runId: null, phase: null, key: null, text: "watcher giving up:\nboom" }), "2026-10-19T12:00:00.000Z watcher-stopped lemmaria/default/? watcher giving up: boom");
   assert.equal(render("await", { ok: true, state: "event", events: [e, { ...e, kind: "gone", text: "" }] }), `${eventLine(e)}\n2026-10-19T12:00:00.000Z gone lemmaria/default/3f2a build 3f2a.2`);
-  const status = { rider: "lemmaria", runId: "3f2a", phase: "build", visits: { build: 1 }, startedAt: e.at, state: "finished", watcher: null, sessions: [], totalCost: 0, baseBranch: "main", lastEvent: e };
+  const status = { rider: "lemmaria", instance: "default", runId: "3f2a", phase: "build", visits: { build: 1 }, startedAt: e.at, state: "finished", watcher: null, sessions: [], totalCost: 0, baseBranch: "main", lastEvent: e };
   assert.match(render("status", status), new RegExp(`last event: ${eventLine(e)}\n`));
 });

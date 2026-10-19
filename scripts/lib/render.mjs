@@ -3,6 +3,8 @@ import { nowLine } from "./keys.mjs";
 import { fmtCost, fmtDuration, formatFinal, formatQuestion } from "./markers.mjs";
 
 const RULE = (title) => `── ${title} ${"─".repeat(Math.max(4, 60 - title.length))}`;
+/** Who a status or check block is about, in the one form event lines and session names use: rider/instance/runId. */
+const whose = (r) => `rider ${r.rider}/${r.instance ?? "?"}${r.runId ? `/${r.runId}` : ""}`;
 /** Branch drift (§11.1), as status and check print it. The tree is every instance's, so it is relayed, never fixed here. */
 const driftLine = (r) => `drift: the shared working tree left ${r.baseBranch ?? "?"} for ${r.branchDrift.branch} (first seen ${r.branchDrift.at}) — the executor does not switch back`;
 const labelText = (l) => (l.label === "resume" || l.label === "operator" ? l.label : `${l.label} → ${l.to}`);
@@ -57,7 +59,7 @@ function renderNone(r) {
 function renderHuman(r) {
   // Entering the phase does not run its check; only `rider check` does, and only then is there an exit code.
   const ran = r.checkExit != null ? `exit ${r.checkExit}` : "not run yet: rider check runs it";
-  const L = [`rider ${r.rider}/${r.runId} · phase ${r.phase} is yours`];
+  const L = [`${whose(r)} · phase ${r.phase} is yours`];
   if (r.branchDrift) L.push(driftLine(r));
   L.push(`check: ${r.check}   (${ran} — the run ends when it exits 0)`);
   if (r.checkOutput) L.push(`  ${r.checkOutput.split("\n").join("\n  ")}`);
@@ -71,7 +73,7 @@ function renderStatus(r) {
   // Every command printed for copying carries the verb's --rider/--instance, as `decide with` does (decision 15).
   const f = r.targetFlags ? ` ${r.targetFlags}` : "";
   if (r.state === "none") {
-    const L = [`rider ${r.rider} · no active run`];
+    const L = [`${whose(r)} · no active run`];
     if (r.lastRun) L.push(`last run ${r.lastRun.runId} ended at ${r.lastRun.endedBy} (phase ${r.lastRun.phase}): ${r.lastRun.reason ?? ""}   cost ${fmtCost(r.lastRun.totalCost)}`);
     if (r.lastRun?.endedBy === "operator") L.push("next, on the operator's word:", ...operatorMoves(r.lastRun.overrulable, r.lastRun.runId, r.targetFlags));
     else L.push(`next: rider start [phase]${f}`);
@@ -80,7 +82,7 @@ function renderStatus(r) {
   const base = r.baseBranch ?? "?";
   // Under drift the tree is not on the base, so the base is not named as the branch.
   const branchText = r.workBranch && r.workBranch !== base ? `base ${base} → work ${r.workBranch}` : r.branchDrift ? `base ${base}` : `branch ${base}`;
-  const L = [`rider ${r.rider}/${r.runId} · phase ${r.phase} (visit ${r.visits[r.phase] ?? 1}) · ${branchText} · started ${r.startedAt}`];
+  const L = [`${whose(r)} · phase ${r.phase} (visit ${r.visits[r.phase] ?? 1})${r.key ? ` · stretch ${r.key}` : ""} · ${branchText} · started ${r.startedAt}`];
   if (r.branchDrift) L.push(driftLine(r));
   L.push(`state: ${r.state}   watcher: ${r.watcher ? `alive (pid ${r.watcher})` : "none"}   last event: ${r.lastEvent ? eventLine(r.lastEvent) : "none"}`);
   for (const s of r.sessions) L.push(`  ${s.phase.padEnd(8)} ${s.model.padEnd(7)} ${(s.shortId ?? "?").padEnd(9)} ${s.outcome.padEnd(13)} ${fmtCost(s.cost)}${s.turns != null ? `  ${s.turns} turns` : ""}${s.resumedFrom ? "  (resumed)" : ""}`);
@@ -109,14 +111,15 @@ function renderBoard(b) {
       if (r.decideWith) L.push(`    ${r.decideWith}`);
     }
   }
-  if (!b.rows.length) L.push(b.riders?.length ? `no instances yet (riders: ${b.riders.join(", ")}) — an instance is a directory its rider's instances glob matches` : "no riders/*/RIDER.md here — nothing on the board");
+  // Not beside an error: of a rider that did not load, nothing is known, its instances included.
+  if (!b.rows.length && !b.errors.length) L.push(b.riders?.length ? `no instances yet (riders: ${b.riders.join(", ")}) — an instance is a directory its rider's instances glob matches` : "no riders/*/RIDER.md here — nothing on the board");
   if (b.skipped.length) L.push(RULE(`skipped (${b.skipped.length})`), ...b.skipped.map((s) => `  ${s.rider}: ${s.path} — ${s.reason}`));
   return L.join("\n");
 }
 
 export function renderCheck(r) {
   const L = [];
-  L.push(`rider ${r.rider}/${r.runId} · phase ${r.phase} · visit ${r.visit} · session ${r.session.shortId ?? r.session.id ?? "?"} (${r.attach})`);
+  L.push(`${whose(r)} · phase ${r.phase} · visit ${r.visit} · session ${r.session.shortId ?? r.session.id ?? "?"} (${r.attach})`);
   L.push(`state: ${r.state.padEnd(14)} (running | done | waiting | gone | rate-limited | intervened)`);
   if (r.branchDrift) L.push(driftLine(r));
   if (r.note) L.push(`note: ${r.note}`);

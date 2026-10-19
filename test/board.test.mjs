@@ -260,6 +260,16 @@ test("a rider whose instances glob matches nothing yet is told apart from no rid
   assert.doesNotMatch(text, /no riders/);
 });
 
+test("a board whose only rider is an error does not claim the rider has no instances", (t) => {
+  const p = tmpProject({ riderMd: TEST_RIDER_MD.replace("start: plan\n", "start: nowhere\n") });
+  t.after(p.cleanup);
+  const board = collectBoard(p.root, { now: NOW, alive });
+  assert.deepEqual([board.rows, board.riders, board.errors.length], [[], ["lemmaria"], 1]);
+  const text = render("board", board);
+  assert.match(text, /── errors \(1\) ─+\n  lemmaria: /);
+  assert.doesNotMatch(text, /no instances yet/, "nothing is known about the instances of a rider that did not load");
+});
+
 test("a state directory that cannot be listed is an error; the rider's instances are still listed", (t) => {
   // Readable for a lookup by name, not for a listing: only the orphan scan lists .rider/<rider>/.
   if (process.platform === "win32" || process.getuid?.() === 0) return t.skip("needs POSIX permissions that bind the caller (not root)");
@@ -370,4 +380,20 @@ test("the instance's total cost sums its ended runs and its active run", (t) => 
   assert.deepEqual([rows.a.runCost, rows.a.instanceCost], [3, 4.75]);
   assert.deepEqual([rows.b.runCost, rows.b.instanceCost, rows.b.category], [4, 4, "needs you"]);
   assert.deepEqual(rows.b.decision, { label: "blocked", because: "a design question", by: "judge" });
+});
+
+test("one unreadable ended-run record is an error; the instance's row stands on the rest", (t) => {
+  const p = tmpProject({ riderMd: INSTANCE_RIDER_MD, instances: ["a"] });
+  t.after(p.cleanup);
+  const paths = put(p.root, "a", { lastRun: ended("done", { runId: "cccc", startedAt: ago(400), totalCost: 0.25 }) });
+  const record = (runId, startedAt, cost) => ({ ...active([stretch("done", { cost })], { runId, startedAt }), endedAt: ago(200), endedBy: "done", reason: "merge: check passed" });
+  const good = record("cccc", ago(400), 0.25);
+  writeJsonAtomic(endedRunPath(paths, good), good);
+  // A record torn by hand or by a disk fault: the board must not lose the instance over it.
+  const torn = endedRunPath(paths, { runId: "bbbb", startedAt: ago(500) });
+  writeFileSync(torn, "{ not json");
+  const board = collectBoard(p.root, { now: NOW, alive });
+  assert.deepEqual(board.rows.map((r) => [r.instance, r.category, r.instanceCost]), [["a", "idle", 0.25]]);
+  assert.deepEqual(board.errors.map((e) => [e.rider, e.instance]), [["lemmaria", "a"]]);
+  assert.ok(board.errors[0].error.includes(torn), board.errors[0].error);
 });

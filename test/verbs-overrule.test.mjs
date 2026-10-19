@@ -147,7 +147,7 @@ test("nothing to overrule: an active run, no run, a reset, a finished run, a sto
   } finally { q.cleanup(); }
 });
 
-test("entering a human phase names the rider and does not claim an exit code it never had", () => {
+test("entering a human phase names the rider and the instance, and does not claim an exit code it never had", () => {
   const p = tmpProject();
   const ctx = makeCtx({ root: p.root, binding: new FakeBinding({ script: [done(GATE)] }) });
   try {
@@ -155,7 +155,7 @@ test("entering a human phase names the rider and does not claim an exit code it 
     check(ctx);
     const r = next(ctx, "gate green", { on: status(ctx).key, because: "ok" });
     const out = render("next", r);
-    assert.match(out, new RegExp(`^rider lemmaria/${r.runId} · phase merge is yours\\n`));
+    assert.match(out, new RegExp(`^rider lemmaria/default/${r.runId} · phase merge is yours\\n`));
     assert.match(out, /check: test -f merged\.flag   \(not run yet: rider check runs it — the run ends when it exits 0\)/);
     assert.doesNotMatch(out, /undefined|exit \?/);
     // `rider check` is what runs it, and only then is there an exit code to print.

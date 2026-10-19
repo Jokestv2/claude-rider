@@ -71,23 +71,26 @@ function ownCategory(state, rider, { now, staleMs, watcherAlive: live }) {
   return row("needs you", `stretch outcome ${sess.outcome}`, stopped, key);
 }
 
-/** The ended runs on file, oldest first. */
-function endedRuns(paths) {
+/** The ended runs on file, oldest first. Each file is read on its own: one that does not parse goes to `onError` and
+ *  is left out, so the instance's row still stands on the rest. */
+function endedRuns(paths, onError) {
   let files = [];
   try { files = readdirSync(paths.runs); } catch (e) { if (e.code !== "ENOENT") throw e; }
-  return files.filter((f) => f.endsWith(".json")).sort().map((f) => readJson(join(paths.runs, f)));
+  return files.filter((f) => f.endsWith(".json")).sort().flatMap((f) => {
+    try { return [readJson(join(paths.runs, f))]; } catch (e) { onError(e); return []; }
+  });
 }
 const sameRun = (a, b) => !!a && !!b && a.runId === b.runId && a.startedAt === b.startedAt;
 
 /** One instance's row. `orphaned` overrides the group and what it waits on, and keeps the run's phase and key. */
-function rowOf(root, rider, { id, scope, orphaned, declared, multiRider, now, staleMs, alive }) {
+function rowOf(root, rider, { id, scope, orphaned, declared, multiRider, now, staleMs, alive, errors }) {
   const paths = instancePaths(root, rider.name, id);
   const state = readState(paths) ?? emptyState({ rider: rider.name, instance: id, scope });
   const { run, lastRun } = state;
   const watcher = watcherAlive(paths, alive);
   const c = categorize(state, rider, { now, staleMs, watcherAlive: !!watcher });
   // A crash inside an end or a revival leaves the active run in runs/ too (§6.3): state.json is the truth.
-  const past = endedRuns(paths).filter((r) => !sameRun(r, run));
+  const past = endedRuns(paths, (e) => errors.push({ rider: rider.name, instance: id, error: e.message })).filter((r) => !sameRun(r, run));
   // lastRun keeps no transitions: with no active run, the latest decision is in the ended run's record.
   const t = (run ?? past.find((r) => sameRun(r, lastRun)))?.transitions?.at(-1);
   return {
@@ -136,7 +139,7 @@ export function collectBoard(root, { now = new Date(), alive = isAlive } = {}) {
     } catch (e) { errors.push({ rider: found.name, error: e.message }); continue; }
     skipped.push(...listed.skipped.map((s) => ({ rider: rider.name, ...s })));
     const one = (id, scope, orphaned) => {
-      try { rows.push(rowOf(root, rider, { id, scope, orphaned, declared: listed.declared, multiRider, now, staleMs, alive })); } catch (e) { errors.push({ rider: rider.name, instance: id, error: e.message }); }
+      try { rows.push(rowOf(root, rider, { id, scope, orphaned, declared: listed.declared, multiRider, now, staleMs, alive, errors })); } catch (e) { errors.push({ rider: rider.name, instance: id, error: e.message }); }
     };
     for (const i of listed.instances) one(i.id, i.scope, false);
     // Listing .rider/<rider>/ is the one read only the orphans need: when it fails, the instances above still stand.
