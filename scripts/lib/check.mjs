@@ -48,6 +48,8 @@ export function readouts(ctx, r) {
 function classify(ctx) {
   const run = ctx.loadRun();
   if (!run) return { state: "none", lastRun: ctx.lastEndedRun() };
+  // Before every return below: a run parked at a human phase or on a stopped stretch must still show the tree moved.
+  if (ctx.instance.declared && noteBranchDrift(ctx, run)) ctx.saveRun(run);
   const def = ctx.rider.phases[run.phase];
   if (def.kind === "human") return checkHuman(ctx, run, def);
   const sess = currentSession(run);
@@ -160,19 +162,29 @@ function classify(ctx) {
  *  the base for the merge — that is exactly when the terminal check needs the feature branch's name — and its tip
  *  is kept beside it, since a sha survives the branch's deletion and a name does not. A rider with instances never
  *  records one (§11.1): the branch checked out is the shared tree's, and would become every instance's work branch
- *  on its next poll. A tree off the base is drift instead, dated from its first sighting and cleared on the base. */
+ *  on its next poll. It notes drift instead (`noteBranchDrift`). */
 function noteWorkBranch(ctx, run) {
+  if (ctx.instance.declared) return;
   const now = ctx.branch();
-  if (ctx.instance.declared) {
-    if (now && run.baseBranch && now !== run.baseBranch) {
-      if (run.branchDrift?.branch !== now) run.branchDrift = { branch: now, at: ctx.now().toISOString() };
-    } else delete run.branchDrift;
-    return;
-  }
   if (!now || now === run.baseBranch) return;
   run.workBranch = now;
   const tip = ctx.tip("HEAD");
   if (tip) run.workTip = tip;
+}
+
+/** For a rider with instances (§11.1): a shared tree off the run's base is drift, dated from its first sighting of
+ *  that branch and cleared once a check finds the base again. Returns whether the run changed, so an idle poll writes
+ *  nothing. */
+function noteBranchDrift(ctx, run) {
+  const now = ctx.branch();
+  if (now && run.baseBranch && now !== run.baseBranch) {
+    if (run.branchDrift?.branch === now) return false;
+    run.branchDrift = { branch: now, at: ctx.now().toISOString() };
+    return true;
+  }
+  if (!("branchDrift" in run)) return false;
+  delete run.branchDrift;
+  return true;
 }
 
 /** The one policy decision in confirming a bare `done` (see its call site): may `check` act on it now?
@@ -222,7 +234,7 @@ function checkHuman(ctx, run, def) {
  *  directory count (§11): the base also carries other instances' work, and shared code is not attributed. */
 function noteAfterHandoff(ctx, run, branchTip) {
   if (!run.handoff?.tip) return;
-  const ref = branchTip ? run.workBranch : run.baseBranch ?? "HEAD";
+  const ref = branchTip ? run.workBranch : (run.baseBranch ?? "HEAD");
   const commits = ctx.commitsBetween(run.handoff.tip, ref);
   if (commits) run.handoff.after = { ref, commits };
 }

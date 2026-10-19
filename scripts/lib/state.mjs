@@ -10,13 +10,16 @@ export function loadLocal(rp) {
 export function newRun({ rider, phase, baseBranch, now }) {
   return { rider, runId: randomBytes(2).toString("hex"), startedAt: now.toISOString(), baseBranch: baseBranch ?? null, phase, visits: {}, transitions: [], sessions: [], notes: [] };
 }
+/** An instance's directory relative to the project root (§11), in one place: `$RIDER_SCOPE` and the pathspec that
+ *  scopes gate precision must never disagree. No instance is a rider without `instances`, scoped to the root. */
+export const scopeOf = (instance) => instance?.scope || ".";
 /** What a RIDER.md-declared command (intake, check, show, evidence) is told about the run and the instance it serves
- *  (§11). No instance is a rider without `instances`: its one instance, `default`, scoped to the project root. */
+ *  (§11). No instance is a rider without `instances`: its one instance, `default`. */
 export function riderEnv(rider, run, instance) {
   return {
     RIDER_NAME: rider?.name ?? "",
     RIDER_INSTANCE: instance?.id ?? "default",
-    RIDER_SCOPE: instance?.scope || ".",
+    RIDER_SCOPE: scopeOf(instance),
     RIDER_RUN_ID: run?.runId ?? "",
     RIDER_PHASE: run?.phase ?? "",
     RIDER_BASE_BRANCH: run?.baseBranch ?? "",

@@ -3,7 +3,7 @@ import { readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { overrulable } from "./rider-md.mjs";
 import { resolveShell, sh } from "./shell.mjs";
-import { riderEnv, totalCost, writeLog } from "./state.mjs";
+import { riderEnv, scopeOf, totalCost, writeLog } from "./state.mjs";
 import { acquireLock, appendEvent, emptyState, endedRunPath, instancePaths, readEvents, readJson, readState, writeJsonAtomic, writeState } from "./store.mjs";
 import { ensureWatcher, killWatcher, watcherAlive } from "./watcher-spawn.mjs";
 import { sleepSync } from "./proc.mjs";
@@ -113,7 +113,7 @@ export function createContext({ rider, instance, root, local, binding, now = () 
     tip: (ref) => { const r = sh('git rev-parse --verify --quiet "$RIDER_REF^{commit}"', { cwd: root, shell, env: { ...process.env, RIDER_REF: ref } }); return r.status === 0 && /^[0-9a-f]{40,64}$/.test(r.output) ? r.output : null; },
     /** `git log --oneline from..to -- <scope>`, as lines; null when git cannot answer (no repository, an unknown ref).
      *  Path-limited to the instance's directory (§11), so instances sharing a branch do not count each other's work. */
-    commitsBetween: (from, to) => { const r = sh('git log --oneline "$RIDER_FROM..$RIDER_TO" -- "$RIDER_SCOPE_PATH"', { cwd: root, shell, capBytes: 8192, env: { ...process.env, RIDER_FROM: from, RIDER_TO: to, RIDER_SCOPE_PATH: instance.scope } }); return r.status === 0 ? r.output.split("\n").filter(Boolean) : null; },
+    commitsBetween: (from, to) => { const r = sh('git log --oneline "$RIDER_FROM..$RIDER_TO" -- "$RIDER_SCOPE_PATH"', { cwd: root, shell, capBytes: 8192, env: { ...process.env, RIDER_FROM: from, RIDER_TO: to, RIDER_SCOPE_PATH: scopeOf(instance) } }); return r.status === 0 ? r.output.split("\n").filter(Boolean) : null; },
     /** Under the lock, so two writers cannot both find no watcher and both spawn one, nor race on watch.pid. */
     ensureWatcher() { locked("ensureWatcher"); return spawnWatcher ? spawnWatcher() : ensureWatcher(paths, { riderName: rider.name, instance: instance.id, root }); },
     watcherAlive: () => (aliveFn ? aliveFn() : watcherAlive(paths)),

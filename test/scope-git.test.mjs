@@ -102,6 +102,66 @@ test("an instance rider never records a work branch; a branch switch is drift on
   } finally { p.cleanup(); }
 });
 
+test("an instance rider's drift is refreshed at a human phase too, and an idle check writes nothing", () => {
+  const p = sharedBranch();
+  try {
+    const a = on(p, "a", [{ statuses: ["done"], read: { lastText: GATE_GREEN, turns: 5 } }]);
+    assert.equal(start(a, { phase: "close" }).ok, true);
+    assert.equal(next(a, "gate green", { on: settled(check, a).key }).state, "human");
+
+    p.git("checkout -q -b elsewhere");
+    assert.equal(check(a).state, "human");
+    assert.equal(a.loadRun().branchDrift?.branch, "elsewhere", "a run parked at the merge still shows the tree moved");
+    const version = a.readState().version;
+    assert.equal(check(a).state, "human");
+    assert.equal(a.readState().version, version, "nothing changed, so nothing is written");
+
+    p.git("checkout -q main");
+    assert.equal(check(a).state, "human");
+    assert.equal(a.loadRun().branchDrift, undefined, "back on the base: no drift");
+    assert.equal(a.loadRun().workBranch, undefined);
+  } finally { p.cleanup(); }
+});
+
+test("an instance rider's drift is refreshed on a stopped stretch awaiting its decision", () => {
+  const p = sharedBranch();
+  try {
+    const a = on(p, "a", [{ statuses: ["done"], read: { lastText: GATE_GREEN, turns: 5 } }]);
+    assert.equal(start(a, { phase: "close" }).ok, true);
+    p.git("checkout -q -b elsewhere");
+    assert.equal(settled(check, a).state, "done");
+    assert.equal(a.loadRun().branchDrift?.branch, "elsewhere", "seen as the stretch stopped");
+
+    // The stretch is stopped: later checks read the stored outcome, and still look at the tree.
+    p.git("checkout -q main");
+    assert.equal(check(a).state, "done");
+    assert.equal(a.loadRun().branchDrift, undefined, "back on the base: no drift");
+    p.git("checkout -q elsewhere");
+    assert.equal(check(a).state, "done");
+    assert.equal(a.loadRun().branchDrift?.branch, "elsewhere");
+  } finally { p.cleanup(); }
+});
+
+test("a rider without instances records no drift at a human phase, and its work branch stays v3's", () => {
+  const riderMd = TEST_RIDER_MD.replace("intake:\n  - test -d riders\n", CLEAN_INTAKE);
+  const p = sharedBranch({ riderMd, instances: [] });
+  try {
+    const ctx = on(p, null, [{ statuses: ["done"], read: { lastText: GATE_GREEN, turns: 5 } }]);
+    assert.equal(start(ctx, { phase: "close" }).ok, true);
+    p.git("checkout -q -b feature/v1");
+    const tip = p.commit("src/work", "feat: the work");
+    assert.equal(next(ctx, "gate green", { on: settled(check, ctx).key }).state, "human");
+    assert.equal(ctx.loadRun().workBranch, "feature/v1");
+
+    p.git("checkout -q -b elsewhere");
+    assert.equal(check(ctx).state, "human");
+    const run = ctx.loadRun();
+    assert.equal(run.branchDrift, undefined, "drift is an instance rider's: this rider tracks branches instead");
+    assert.equal(run.workBranch, "feature/v1", "a human phase does not re-read the checked-out branch");
+    assert.equal(run.workTip, tip);
+  } finally { p.cleanup(); }
+});
+
 test("RIDER_INSTANCE and RIDER_SCOPE reach intake, evidence, check and show", () => {
   const riderMd = SCOPED_RIDER_MD
     .replace(CLEAN_INTAKE, 'intake:\n  - test "$RIDER_INSTANCE" = a && test "$RIDER_SCOPE" = nodes/a\n')
