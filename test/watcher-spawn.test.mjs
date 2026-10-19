@@ -36,3 +36,24 @@ test("no spawn while the pid file names a live process; spawn detached when stal
   assert.equal(watcherAlive(paths, () => true), null);
   rmSync(root, { recursive: true, force: true });
 });
+
+test("the watcher is spawned per instance", () => {
+  const root = mkdtempSync(join(tmpdir(), "rider-watch-"));
+  try {
+    const calls = [];
+    let pid = 776;
+    const spawn = (cmd, args) => { calls.push(args); return { pid: ++pid, unref() {} }; };
+    const a = instancePaths(root, "lemmaria", "a");
+    const b = instancePaths(root, "lemmaria", "b");
+    assert.equal(ensureWatcher(a, { riderName: "lemmaria", instance: "a", root, script: "/x/rider.mjs", alive: () => false, spawn }), true);
+    assert.deepEqual(calls[0].slice(-5), ["watch", "--rider", "lemmaria", "--instance", "a"]);
+    assert.equal(readFileSync(join(root, ".rider", "lemmaria", "a", "watch.pid"), "utf8"), "777");
+    // a's live watcher watches a only: b still gets its own
+    const alive = (p) => p === 777;
+    assert.equal(ensureWatcher(b, { riderName: "lemmaria", instance: "b", root, script: "/x/rider.mjs", alive, spawn }), true);
+    assert.deepEqual(calls[1].slice(-5), ["watch", "--rider", "lemmaria", "--instance", "b"]);
+    assert.equal(readFileSync(join(root, ".rider", "lemmaria", "b", "watch.pid"), "utf8"), "778");
+    assert.equal(ensureWatcher(a, { riderName: "lemmaria", instance: "a", root, script: "/x/rider.mjs", alive, spawn }), false);
+    assert.equal(calls.length, 2);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});

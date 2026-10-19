@@ -6,7 +6,7 @@ import { parseArgs } from "node:util";
 import { check } from "./lib/check.mjs";
 import { createContext } from "./lib/context.mjs";
 import { render } from "./lib/render.mjs";
-import { discoverRiders, loadRider } from "./lib/rider-md.mjs";
+import { discoverRiders, listInstances, loadRider } from "./lib/rider-md.mjs";
 import { loadLocal } from "./lib/state.mjs";
 import { guardV3, riderPaths } from "./lib/store.mjs";
 import * as verbs from "./lib/verbs.mjs";
@@ -26,7 +26,7 @@ const USAGE = `rider — drive riders/<name>/RIDER.md one phase at a time (run f
   rider watch                         the detached watcher itself (spawned by start/next/resume/check)
 
   --rider <directory name>   when the project has several riders   --json   machine-readable output
-  --instance <id>  the rider's instance (default: default)
+  --instance <id>  which instance: required when the rider declares instances, else omitted (or default)
   --dry-run        start/next/resume/overrule print the harness command and run nothing
   --max-minutes N  await's deadline in minutes (default 60)  --binding <path>  another harness module (or RIDER_BINDING)
 exit: 0 ok · 2 refused or usage · 3 await timed out`;
@@ -69,11 +69,9 @@ export async function main(argv = process.argv.slice(2), { cwd = process.cwd(), 
   if (!Number.isFinite(maxMinutes) || maxMinutes <= 0) return fail(`--max-minutes must be a positive number\n${USAGE}`);
   try {
     const rider = loadRider(found.file);
+    const instance = resolveInstance(cwd, rider, cli.flags.instance);
     const rp = riderPaths(cwd, rider.name);
     guardV3(rp);
-    const id = cli.flags.instance ?? "default";
-    if (id !== "default") return fail(`no instance "${id}" — omit --instance to use the default instance`);
-    const instance = { id, scope: ".", declared: false };
     const local = loadLocal(rp);
     const bindingPath = cli.flags.binding ?? process.env.RIDER_BINDING ?? null;
     const bindingUrl = bindingPath ? pathToFileURL(bindingPath).href : new URL("./bindings/claude-code.mjs", import.meta.url).href;
@@ -103,6 +101,21 @@ export async function main(argv = process.argv.slice(2), { cwd = process.cwd(), 
   } catch (e) {
     return fail(e.message);
   }
+}
+
+/** The instance a verb acts on (§9). Matched against the directories that exist, never just checked for shape: the
+ *  id becomes a path under .rider/, and a guess at an id must not create state for an instance nobody declared. */
+export function resolveInstance(root, rider, id = null) {
+  const { declared, instances } = listInstances(root, rider);
+  if (!declared) {
+    if (id == null || id === "default") return { id: "default", scope: ".", declared: false };
+    throw new Error(`${rider.name} declares no instances — omit --instance`);
+  }
+  const have = instances.map((i) => i.id).join(", ") || "none";
+  if (id == null) throw new Error(`${rider.name} declares instances — pass --instance <id>; have: ${have}`);
+  const found = instances.find((i) => i.id === id);
+  if (!found) throw new Error(`${rider.name} has no instance "${id}" — pass --instance <id>; have: ${have}`);
+  return { id: found.id, scope: found.scope, declared: true };
 }
 
 /** The watcher process. Its pid file is written and removed under the instance lock, like every other write; the
