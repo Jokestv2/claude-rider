@@ -1,7 +1,7 @@
 // scripts/lib/board.mjs — every instance of every rider, needs-you first (§10). Reads only: no lock, no binding.
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { currentKey, decideWithLine } from "./keys.mjs";
+import { currentKey, decideWithLine, targetFlags } from "./keys.mjs";
 import { isAlive } from "./proc.mjs";
 import { discoverRiders, legalLabels, listInstances, loadRider, RESERVED_IDS, SAFE_ID } from "./rider-md.mjs";
 import { currentSession, loadLocal, scopeOf, totalCost } from "./state.mjs";
@@ -42,11 +42,13 @@ export function categorize(state, rider, { now, staleMs, watcherAlive: live }) {
   if (sess.outcome === "waiting") return row("needs you", `question: ${firstQuestion(sess.question)}`, sess.at, key);
   // "Running" is what the watcher last recorded, not a fresh poll; with the watcher dead nothing will update it.
   if (sess.outcome === "running") return live ? row("running", `session ${sess.shortId ?? sess.id ?? "?"} running`, sess.at, key) : row("needs you", "watcher not alive", sess.at, key);
+  // Before the rate limit: check counts a rate-limited stretch as stopped, so a human turn makes it intervened there and
+  // the watcher does not wait on it. The board gives the same reason check does.
+  if (sess.intervened) return row("needs you", "intervened: a human turn reached the session", stopped, key);
   if (sess.outcome === "rate-limited") {
     const at = sess.rateLimit?.at ?? stopped;
     return live ? row("running", `rate-limited; resumes after ${sess.rateLimit?.resetAt ?? "?"}`, at, key) : row("needs you", "rate-limited; the watcher gave up or died", at, key);
   }
-  if (sess.intervened) return row("needs you", "intervened: a human turn reached the session", stopped, key);
   if (sess.outcome === "done" || sess.outcome === "gone") {
     const labels = legalLabels(rider, run.phase).map((l) => l.label);
     const age = now.getTime() - new Date(stopped).getTime();
@@ -81,7 +83,7 @@ function rowOf(root, rider, { id, scope, orphaned, declared, multiRider, now, st
     category: orphaned ? "orphaned" : c.category,
     phase: run?.phase ?? lastRun?.phase ?? null, runId: run?.runId ?? lastRun?.runId ?? null,
     since: c.since,
-    waitsOn: orphaned ? `no directory matches — rider status/reset --instance ${id}` : c.waitsOn,
+    waitsOn: orphaned ? `no directory matches — rider status/reset ${targetFlags({ rider: rider.name, multiRider, instance: id, declared: true })}` : c.waitsOn,
     decision: t ? { label: t.label, because: t.because ?? null, by: t.by ?? null } : null,
     runCost: run ? totalCost(run) : lastRun?.totalCost ?? null,
     instanceCost: past.reduce((a, r) => a + totalCost(r), 0) + totalCost(run),
@@ -124,7 +126,11 @@ export function collectBoard(root, { now = new Date(), alive = isAlive } = {}) {
       try { rows.push(rowOf(root, rider, { id, scope, orphaned, declared: listed.declared, multiRider, now, staleMs, alive })); } catch (e) { errors.push({ rider: rider.name, instance: id, error: e.message }); }
     };
     for (const i of listed.instances) one(i.id, i.scope, false);
-    for (const id of orphanIds(root, rider.name, new Set(listed.instances.map((i) => i.id)))) one(id, null, true);
+    // Listing .rider/<rider>/ is the one read only the orphans need: when it fails, the instances above still stand.
+    let orphans = [];
+    try { orphans = orphanIds(root, rider.name, new Set(listed.instances.map((i) => i.id))); } catch (e) { errors.push({ rider: rider.name, error: e.message }); }
+    for (const id of orphans) one(id, null, true);
   }
-  return { board: 1, generatedAt: now.toISOString(), rows: rows.sort(order), skipped, errors };
+  // `riders` tells a project with no riders from one whose riders have no instances yet.
+  return { board: 1, generatedAt: now.toISOString(), riders: riders.map((r) => r.name), rows: rows.sort(order), skipped, errors };
 }

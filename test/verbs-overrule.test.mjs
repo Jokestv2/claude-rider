@@ -58,6 +58,24 @@ test("the printed overrule move names the rider and the instance whenever the CL
   assert.ok(render("status", status(ctx)).includes(move), render("status", status(ctx)));
 });
 
+test("every printed move carries --rider and --instance whenever the CLI needs them", (t) => {
+  const md = INSTANCE_RIDER_MD.replace("edges: { planned: build, blocked: operator }", "edges: { retry: plan, planned: build }").replace("intake:", "limits:\n  visits: 1\nintake:");
+  const p = tmpProject({ riderMd: md, instances: ["a"] });
+  t.after(p.cleanup);
+  const ctx = makeCtx({ root: p.root, instance: "a", riderCount: 2, binding: new FakeBinding({ script: [done("STATUS: retry")] }) });
+  const flags = "--rider lemmaria --instance a";
+  assert.match(render("status", status(ctx)), new RegExp(`^next: rider start \\[phase\\] ${flags}$`, "m"));
+  start(ctx);
+  assert.match(render("status", status(ctx)), new RegExp(`^next: arm rider await ${flags} \\(background\\) and stop$`, "m"));
+  check(ctx);
+  assert.match(render("status", status(ctx)), new RegExp(`^next: rider check ${flags}, then the command`, "m"));
+  // The visit cap: the executor's own stop offers only a fresh start, and that start runs as printed too.
+  const capped = next(ctx, "retry", { on: status(ctx).key, because: "once more" });
+  assert.equal(capped.state, "operator");
+  assert.match(render("next", capped), new RegExp(`^  rider start \\[phase\\] ${flags} `, "m"));
+  assert.match(render("status", status(ctx)), new RegExp(`^  rider start \\[phase\\] ${flags} `, "m"));
+});
+
 test("overrule into a session phase launches it like any edge", () => {
   const { p, ctx, binding, stop } = stoppedAtOperator([done("STATUS: planned — build pending\n<promise>X</promise>"), { statuses: ["running"] }], "plan");
   try {

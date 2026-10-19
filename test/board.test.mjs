@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { categorize, collectBoard } from "../scripts/lib/board.mjs";
@@ -110,6 +110,18 @@ test("every category is produced", (t) => {
   assert.match(text, /lemmaria\/stale\b[^\n]*undecided for 25 min/);
 });
 
+test("a rate-limited stretch a human turn reached reads intervened, as check reads it", (t) => {
+  const p = tmpProject({ riderMd: INSTANCE_RIDER_MD, instances: ["x"] });
+  t.after(p.cleanup);
+  // check counts a rate limit as a stop, so a human turn makes the stretch intervened and the watcher does not wait on it.
+  const run = active([stretch("rate-limited", { stoppedAt: ago(5), rateLimit: { at: ago(5), resetAt: "2026-10-01T13:00:00.000Z" }, intervened: true, humanTurns: 1 })]);
+  const state = { ...emptyState({ rider: "lemmaria", instance: "x", scope: "nodes/x" }), run };
+  for (const live of [true, false]) {
+    const c = categorize(state, loadRider(p.file), { now: NOW, staleMs: 20 * 60_000, watcherAlive: live });
+    assert.deepEqual([c.category, c.waitsOn], ["needs you", "intervened: a human turn reached the session"], `watcher ${live ? "alive" : "dead"}`);
+  }
+});
+
 test("staleDecisionMinutes in local.json moves the line", (t) => {
   const p = everyCase(t, { fresh: CASES.fresh, edge: { run: active([stretch("done", { stoppedAt: ago(5) })]) } });
   assert.equal(byInstance(collectBoard(p.root, { now: NOW, alive })).fresh.category, "needs its judge", "the default is 20");
@@ -169,6 +181,8 @@ test("the order is needs you first, then orphaned, needs its judge, running, idl
   assert.match(byInstance(board).j.decideWith, /rider next <label> --rider lemmaria --instance j --on 3f2a\.1 /);
   // An orphan keeps its run's phase and key, but no decide-with line: next refuses its id.
   assert.deepEqual([byInstance(board).o.phase, byInstance(board).o.key, byInstance(board).o.decideWith], ["build", "3f2a.1", null]);
+  // Its hint names the rider too: with two riders, status and reset need --rider.
+  assert.equal(byInstance(board).o.waitsOn, "no directory matches — rider status/reset --rider lemmaria --instance o");
 });
 
 test("one invalid RIDER.md is an error row; the other riders are listed", (t) => {
@@ -205,6 +219,38 @@ test("v3 state, an unreadable state.json and a broken local.json are errors; the
   assert.match(why.odd, /local\.json/);
   assert.match(why.old, /state from an older claude-rider[\s\S]*Finish or reset that run with the old version first/);
   assert.deepEqual(board.rows.map((r) => `${r.rider}/${r.instance}`), ["lemmaria/a"]);
+});
+
+test("a rider whose instances glob matches nothing yet is told apart from no riders at all", (t) => {
+  const none = tmpProject();
+  t.after(none.cleanup);
+  rmSync(join(none.root, "riders"), { recursive: true });
+  const empty = collectBoard(none.root, { now: NOW, alive });
+  assert.deepEqual([empty.rows, empty.riders], [[], []]);
+  assert.match(render("board", empty), /^no riders\/\*\/RIDER\.md here/);
+  const p = tmpProject({ riderMd: INSTANCE_RIDER_MD });
+  t.after(p.cleanup);
+  const board = collectBoard(p.root, { now: NOW, alive });
+  assert.deepEqual([board.rows, board.riders], [[], ["lemmaria"]]);
+  const text = render("board", board);
+  assert.match(text, /no instances yet/);
+  assert.match(text, /lemmaria/);
+  assert.doesNotMatch(text, /no riders/);
+});
+
+test("a state directory that cannot be listed is an error; the rider's instances are still listed", (t) => {
+  // Readable for a lookup by name, not for a listing: only the orphan scan lists .rider/<rider>/.
+  if (process.platform === "win32" || process.getuid?.() === 0) return t.skip("needs POSIX permissions that bind the caller (not root)");
+  const p = tmpProject({ riderMd: INSTANCE_RIDER_MD, instances: ["a"] });
+  put(p.root, "a", { lastRun: ended("done") });
+  const dir = join(p.root, ".rider", "lemmaria");
+  chmodSync(dir, 0o311);
+  t.after(() => { chmodSync(dir, 0o755); p.cleanup(); });
+  const board = collectBoard(p.root, { now: NOW, alive });
+  assert.deepEqual(board.rows.map((r) => [r.instance, r.category]), [["a", "idle"]]);
+  assert.equal(board.errors.length, 1);
+  assert.deepEqual([board.errors[0].rider, board.errors[0].instance ?? null], ["lemmaria", null]);
+  assert.match(board.errors[0].error, /EACCES/);
 });
 
 test("--json carries board: 1 and the state path", (t) => {
@@ -246,7 +292,7 @@ test("an orphan's id is accepted by status and reset, refused by next", (t) => {
   const st = run("status", "--instance", "gone", "--json");
   assert.equal(st.code, 0, st.err);
   assert.deepEqual([JSON.parse(st.out).instance, JSON.parse(st.out).scope, JSON.parse(st.out).key], ["gone", "nodes/gone", "3f2a.1"]);
-  for (const args of [["next", "code green", "--on", "3f2a.1", "--because", "x"], ["check"], ["resume", "--on", "3f2a.1"], ["note", "x"]]) {
+  for (const args of [["next", "code green", "--on", "3f2a.1", "--because", "x"], ["check"], ["resume", "--on", "3f2a.1"], ["note", "x"], ["await", "--max-minutes", "1"], ["watch"]]) {
     const r = run(...args, "--instance", "gone");
     assert.deepEqual([r.code, r.err.trim()], [2, refusal], args[0]);
   }

@@ -56,7 +56,7 @@ function staleActive(run, on) {
 
 const labelList = (ctx, phase) => legalLabels(ctx.rider, phase).map((l) => l.label).join(" · ");
 const sessionName = (run, instance, phase) => `rider ${run.rider}/${instance}/${run.runId} ${phase}`;
-/** What the operator moves a result prints need in order to run as printed: the same flags as `decide with` (decision 15). */
+/** What the commands a result prints need in order to run as printed: the same flags as `decide with` (decision 15). */
 const flagsOf = (ctx) => targetFlags({ rider: ctx.rider.name, multiRider: ctx.riderCount > 1, instance: ctx.instance.id, declared: !!ctx.instance.declared });
 
 /** §12: a phase prompt is shared by every instance and sent verbatim, so which instance a run serves reaches the
@@ -98,7 +98,7 @@ export function enterPhase(ctx, run, phase, { dryRun = false } = {}) {
     // `by: "executor"`: nobody judged this stop, so there is no call for `overrule` to overrule.
     run.transitions.push({ at, from: phase, label: "operator", to: "operator", because, by: "executor" });
     if (!dryRun) ctx.endRun(run, { endedBy: "operator", reason: because });
-    return { ok: true, state: "operator", runId: run.runId, reason: because, totalCost: totalCost(run) };
+    return { ok: true, state: "operator", runId: run.runId, reason: because, targetFlags: flagsOf(ctx), totalCost: totalCost(run) };
   }
   if (def.kind === "human") {
     if (dryRun) return { ok: true, state: "dry-run", phase, human: true, check: def.check };
@@ -233,8 +233,8 @@ export function status(ctx) {
   const { run, lastRun } = ctx.readState();
   const watcher = ctx.watcherAlive();
   const lastEvent = ctx.readEvents().at(-1) ?? null;
-  const where = { instance: ctx.instance.id, scope: ctx.instance.scope };
-  if (!run) return { ok: true, state: "none", rider: ctx.rider.name, ...where, targetFlags: flagsOf(ctx), watcher, lastEvent, lastRun };
+  const where = { instance: ctx.instance.id, scope: ctx.instance.scope, targetFlags: flagsOf(ctx) };
+  if (!run) return { ok: true, state: "none", rider: ctx.rider.name, ...where, watcher, lastEvent, lastRun };
   const def = ctx.rider.phases[run.phase];
   const sess = currentSession(run);
   const state = def.kind === "human" ? "human" : !sess ? "none" : sess.outcome === "running" ? "running" : sess.outcome === "waiting" ? "waiting" : "finished";

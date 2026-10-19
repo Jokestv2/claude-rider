@@ -32,11 +32,11 @@ export function render(verb, r) {
 /** Everything the operator can do after an `operator` stop, spelled as commands that exist: a judge
  *  left to describe the way out invents one (842b's told the operator to `rider start merge`, which the
  *  executor refuses). `labels` is what `overrule` would accept — empty when the executor made the stop.
- *  `flags` are the verb's `--rider`/`--instance` (`targetFlags`), so the overrule runs as printed. */
+ *  `flags` are the verb's `--rider`/`--instance` (`targetFlags`), so every move runs as printed. */
 function operatorMoves(labels, runId, flags = "") {
   const moves = [];
   if (labels?.length) moves.push([`rider overrule "<label>"${flags ? ` ${flags}` : ""} --because "…" --on ${runId}`, `the phase's outcome stands after all: revive this run and take that edge (${labels.join(" · ")})`]);
-  moves.push(["rider start [phase]", "a fresh run, once what stopped this one is dealt with"]);
+  moves.push([`rider start [phase]${flags ? ` ${flags}` : ""}`, "a fresh run, once what stopped this one is dealt with"]);
   const width = Math.max(...moves.map(([cmd]) => cmd.length)) + 3;
   return moves.map(([cmd, what]) => `  ${cmd.padEnd(width)}${what}`);
 }
@@ -64,11 +64,13 @@ function renderHuman(r) {
 }
 
 function renderStatus(r) {
+  // Every command printed for copying carries the verb's --rider/--instance, as `decide with` does (decision 15).
+  const f = r.targetFlags ? ` ${r.targetFlags}` : "";
   if (r.state === "none") {
     const L = [`rider ${r.rider} · no active run`];
     if (r.lastRun) L.push(`last run ${r.lastRun.runId} ended at ${r.lastRun.endedBy} (phase ${r.lastRun.phase}): ${r.lastRun.reason ?? ""}   cost ${fmtCost(r.lastRun.totalCost)}`);
     if (r.lastRun?.endedBy === "operator") L.push("next, on the operator's word:", ...operatorMoves(r.lastRun.overrulable, r.lastRun.runId, r.targetFlags));
-    else L.push("next: rider start [phase]");
+    else L.push(`next: rider start [phase]${f}`);
     return L.join("\n");
   }
   const base = r.baseBranch ?? "?";
@@ -77,7 +79,7 @@ function renderStatus(r) {
   for (const s of r.sessions) L.push(`  ${s.phase.padEnd(8)} ${s.model.padEnd(7)} ${(s.shortId ?? "?").padEnd(9)} ${s.outcome.padEnd(13)} ${fmtCost(s.cost)}${s.turns != null ? `  ${s.turns} turns` : ""}${s.resumedFrom ? "  (resumed)" : ""}`);
   L.push(`total cost: ${fmtCost(r.totalCost)}`);
   if (r.attach) L.push(`attach: ${r.attach}`);
-  L.push(`next: ${{ running: "arm rider await (background) and stop", waiting: "rider check, relay the question, arm rider await", finished: "rider check, then the command its decide-with line prints", human: "rider check (runs the phase's check command)" }[r.state]}`);
+  L.push(`next: ${{ running: `arm rider await${f} (background) and stop`, waiting: `rider check${f}, relay the question, arm rider await${f}`, finished: `rider check${f}, then the command its decide-with line prints`, human: `rider check${f} (runs the phase's check command)` }[r.state]}`);
   return L.join("\n");
 }
 
@@ -100,8 +102,9 @@ function renderBoard(b) {
       if (r.decideWith) L.push(`    ${r.decideWith}`);
     }
   }
+  if (!b.rows.length) L.push(b.riders?.length ? `no instances yet (riders: ${b.riders.join(", ")}) — an instance is a directory its rider's instances glob matches` : "no riders/*/RIDER.md here — nothing on the board");
   if (b.skipped.length) L.push(RULE(`skipped (${b.skipped.length})`), ...b.skipped.map((s) => `  ${s.rider}: ${s.path} — ${s.reason}`));
-  return L.length ? L.join("\n") : "no riders/*/RIDER.md here — nothing on the board";
+  return L.join("\n");
 }
 
 export function renderCheck(r) {
