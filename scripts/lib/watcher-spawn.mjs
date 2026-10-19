@@ -1,8 +1,9 @@
 // scripts/lib/watcher-spawn.mjs
 import { spawn as nodeSpawn } from "node:child_process";
-import { existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, openSync, readFileSync, rmSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { isAlive } from "./proc.mjs";
+import { writeJsonAtomic } from "./store.mjs";
 
 const RIDER_SCRIPT = fileURLToPath(new URL("../rider.mjs", import.meta.url));
 
@@ -11,6 +12,9 @@ function readPid(path) {
   const n = Number(readFileSync(path, "utf8").trim());
   return Number.isInteger(n) && n > 0 ? n : null;
 }
+
+/** Replaced whole by a rename: board, status and await read it with no lock, and must never find it empty. */
+export function writeWatchPid(paths, pid) { writeJsonAtomic(paths.watchPid, pid); }
 
 export function watcherAlive(paths, alive = isAlive) {
   const pid = readPid(paths.watchPid);
@@ -25,7 +29,7 @@ export function ensureWatcher(paths, { riderName, instance, root, script = RIDER
   const out = openSync(paths.watchLog, "a");
   const child = spawn(process.execPath, [script, "watch", "--rider", riderName, "--instance", instance], { cwd: root, detached: true, stdio: ["ignore", out, out], windowsHide: true });
   child.unref();
-  writeFileSync(paths.watchPid, String(child.pid));
+  writeWatchPid(paths, child.pid);
   return true;
 }
 

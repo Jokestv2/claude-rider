@@ -41,6 +41,33 @@ test("a rate limit inside the caps: no event, wait to the reset + 1 min, resume,
   assert.deepEqual(wake(t.ctx).map((e) => [e.kind, e.key]), [["done", `${r.runId}.2`]]);
   assert.equal(t.binding.calls.filter((c) => c.call === "resume").length, 1);
   assert.ok(t.logs.some((m) => /rate limited; waiting/.test(m)));
+  // The wait is pollMs ticks, each one state read, never one long sleep: a stretch launched meanwhile is picked up in a poll.
+  assert.ok(t.clock.slept.every((ms) => ms <= 30_000), `slept ${t.clock.slept.join(", ")}`);
+  t.p.cleanup();
+});
+
+test("a decision during the rate-limit wait: the same watcher watches the new stretch and emits its stop", () => {
+  const t = setup([]);
+  t.binding.s.scripts.push({ statuses: ["done"], read: { lastText: null, signal: limitSoon(t.clock), turns: 20 } }, { statuses: ["running", "done"], read: { lastText: "STATUS: code green\n<promise>X</promise>", turns: 9 } });
+  const judge = makeCtx({ root: t.p.root, binding: t.binding, clock: t.clock });
+  const { runId: r } = start(t.ctx);
+  // The judge decides plan's stretch while the watcher sleeps through the wait. `next` finds this watcher alive and
+  // spawns none, so nothing else would watch build.
+  const sleep = t.ctx.sleep;
+  let decided = false;
+  t.ctx.sleep = (ms) => {
+    sleep(ms);
+    if (!decided && judge.loadRun().sessions[0].outcome === "rate-limited") {
+      decided = true;
+      assert.equal(next(judge, "planned", { on: `${r}.1`, because: "the plan was committed before the limit" }).phase, "build");
+    }
+  };
+  const out = watchLoop(t.ctx, opts(t));
+  assert.equal(decided, true);
+  assert.deepEqual([out?.state, out?.key, out?.phase], ["done", `${r}.2`, "build"]);
+  assert.deepEqual(wake(t.ctx).map((e) => [e.kind, e.key]), [["done", `${r}.2`]]);
+  assert.equal(t.binding.calls.filter((c) => c.call === "resume").length, 0, "the waited stretch is not resumed");
+  assert.ok(t.logs.includes("the run moved on while waiting; watching its current stretch"), t.logs.join("\n"));
   t.p.cleanup();
 });
 
@@ -192,4 +219,22 @@ test("await: returns on a new event, at once when the phase is past running, or 
   const early = awaitEvent(t.ctx, { maxMinutes: 60, pollMs: 10_000 });
   assert.deepEqual([early.ok, early.events, early.reason], [true, [], "phase plan is done"]);
   t.p.cleanup();
+});
+
+test("await: a rate-limited stretch whose watcher is alive waits for the reset; with the watcher gone it returns at once", () => {
+  const p = tmpProject();
+  const clock = new FakeClock();
+  let pid = 4242;
+  const ctx = makeCtx({ root: p.root, binding: new FakeBinding({ script: [{ statuses: ["running"] }] }), clock, watcherAlive: () => pid });
+  start(ctx);
+  const run = ctx.loadRun();
+  Object.assign(run.sessions[0], { outcome: "rate-limited", rateLimit: { at: clock.now().toISOString(), resetAt: "2026-09-03T13:00:00.000Z" } });
+  save(ctx, run);
+  // The watcher sleeps through the wait and resumes on its own: an await that returned here would be re-armed and
+  // return again, with no event in between.
+  assert.deepEqual(awaitEvent(ctx, { maxMinutes: 1, pollMs: 10_000 }).state, "timeout");
+  pid = null;
+  const gone = awaitEvent(ctx, { maxMinutes: 60, pollMs: 10_000 });
+  assert.deepEqual([gone.ok, gone.events, gone.reason], [true, [], "phase plan is rate-limited"]);
+  p.cleanup();
 });

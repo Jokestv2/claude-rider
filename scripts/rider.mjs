@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // scripts/rider.mjs — the executor's verbs (§4.1). Text out for the judge, --json for scripts.
-import { existsSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { collectBoard, hasState } from "./lib/board.mjs";
@@ -12,6 +12,7 @@ import { loadLocal } from "./lib/state.mjs";
 import { guardV3, instancePaths, readState, riderPaths } from "./lib/store.mjs";
 import * as verbs from "./lib/verbs.mjs";
 import { awaitEvent, watchLoop } from "./lib/watch.mjs";
+import { writeWatchPid } from "./lib/watcher-spawn.mjs";
 
 const USAGE = `rider — drive riders/<name>/RIDER.md one phase at a time (run from the project root)
 
@@ -140,7 +141,7 @@ export function resolveInstance(root, rider, id = null) {
 function runWatch(ctx, local, stdout) {
   const { watchPid } = ctx.paths;
   const mine = String(process.pid);
-  ctx.update(() => writeFileSync(watchPid, mine));
+  ctx.update(() => writeWatchPid(ctx.paths, process.pid));
   const log = (m) => stdout(`${new Date().toISOString()} ${m}`);
   try {
     watchLoop(ctx, { maxWaitHours: local.maxWaitHours, pollMs: local.pollSeconds * 1000, log });

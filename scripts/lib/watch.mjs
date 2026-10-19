@@ -15,7 +15,7 @@ const emit = (ctx, r, kind, text = "") => ctx.update(() => {
   return true;
 });
 const MOVED_ON = "the run moved on; exiting";
-const MOVED_ON_WAITING = "the run moved on while waiting; exiting";
+const MOVED_ON_WAITING = "the run moved on while waiting; watching its current stretch";
 
 /** The give-up event when `check` keeps throwing. Reads the run defensively: a corrupt state.json is the
  *  likeliest reason check threw at all, and `loadRun` would then throw again here. */
@@ -87,14 +87,18 @@ export function watchLoop(ctx, { maxWaitHours = 6, pollMs = 30_000, maxResumes =
       const until = resetAt.getTime() + 60_000;
       log(`rate limited; waiting ${fmtDuration(until - ctx.now().getTime())} for the reset, then resuming ${r.session.id}`);
       // The key of the stretch it waits on: its resume is a decision like any other (§8), refused if anyone else moved first.
+      // A decision during the wait launches its stretch while this watcher is alive, so none is spawned for it: the wait
+      // ticks at pollMs, one state read each, and on a moved key goes back to watching whatever the run now runs.
       const waited = r.key;
-      while (ctx.now().getTime() < until) {
-        ctx.sleep(Math.min(15 * 60_000, until - ctx.now().getTime()));
-        if (currentKey(ctx.loadRun()) !== waited) { log(MOVED_ON_WAITING); return null; }
+      let moved = false;
+      while (!moved && ctx.now().getTime() < until) {
+        ctx.sleep(Math.min(pollMs, until - ctx.now().getTime()));
+        moved = currentKey(ctx.loadRun()) !== waited;
       }
+      if (moved) { log(MOVED_ON_WAITING); continue; }
       const res = resume(ctx, { on: waited, by: "executor", reason: "rate-limit" });
       if (!res.ok) {
-        if (res.stale) { log(MOVED_ON_WAITING); return null; }
+        if (res.stale) { log(MOVED_ON_WAITING); continue; }
         if (!emit(ctx, r, "rate-limited", `resume failed: ${res.error}`)) { log(MOVED_ON); return null; }
         return r;
       }
@@ -107,8 +111,16 @@ export function watchLoop(ctx, { maxWaitHours = 6, pollMs = 30_000, maxResumes =
   }
 }
 
+/** A rate-limited stretch whose watcher is alive is waiting for the reset, and reads as running (spec decision 15). The
+ *  watcher resumes it on its own, or emits `rate-limited` when it gives up: either way an event comes. */
+function waitsOnReset(ctx, run) {
+  const sess = run && currentSession(run);
+  return sess?.outcome === "rate-limited" && !sess.intervened && !!ctx.watcherAlive();
+}
+
 /** What the judge backgrounds (§3.3, §13): block until the watcher's next wake event, or until the phase is past
- *  running. It reads without the lock; only a respawn writes. */
+ *  running. It reads without the lock; only a respawn writes. An await that returned at once on a reset the watcher
+ *  waits for would be re-armed and return again, with no event in between. */
 export function awaitEvent(ctx, { maxMinutes = 60, pollMs = 10_000 } = {}) {
   const baseline = ctx.readEvents().reduce((max, e) => (Number.isInteger(e.seq) && e.seq > max ? e.seq : max), 0);
   const deadline = ctx.now().getTime() + maxMinutes * 60_000;
@@ -116,7 +128,7 @@ export function awaitEvent(ctx, { maxMinutes = 60, pollMs = 10_000 } = {}) {
     const events = ctx.readEvents().filter((e) => e.seq > baseline && WAKE_KINDS.includes(e.kind));
     if (events.length) return { ok: true, state: "event", events };
     const run = ctx.loadRun();
-    if (!isLive(run, ctx.rider)) {
+    if (!isLive(run, ctx.rider) && !waitsOnReset(ctx, run)) {
       const sess = run && currentSession(run);
       const kind = run ? ctx.rider.phases[run.phase].kind : null;
       return { ok: true, state: "event", events: [], reason: run ? `phase ${run.phase} is ${kind === "human" ? "a human phase" : sess?.outcome ?? "unlaunched"}` : "no active run" };

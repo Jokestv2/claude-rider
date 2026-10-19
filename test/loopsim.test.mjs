@@ -58,11 +58,11 @@ test("429 twice mid-plan: both waited out inside the watch, resumed twice, then 
   assert.deepEqual(wake(t.ctx).map((e) => e.kind), ["done"]);
   assert.deepEqual(t.ctx.loadRun().sessions.map((s) => [s.phase, s.outcome, s.resumeReason, s.cost]), [["plan", "rate-limited", null, 6], ["plan", "rate-limited", "rate-limit", 7], ["plan", "done", "rate-limit", 2]]);
   // both waits happened inside the watch: the clock sits past the second reset + 60 s, and the last stretch took one
-  // running poll to sign off — the grace window would have cost twenty
+  // running poll to sign off — the grace window would have cost twenty. The waits tick at the poll interval too, so
+  // the polls are told apart by where the clock stops, not by counting 30 s sleeps.
   assert.ok(t.clock.t >= t0 + 66 * 60_000, `clock advanced ${(t.clock.t - t0) / 60_000} min`);
-  // …plus one confirming poll per rate-limited stop: a `done` with no STATUS line is looked at twice before it is
-  // believed (`bareDoneConfirmed`), and a rate limit is such a stop.
-  assert.equal(t.clock.slept.filter((ms) => ms === 30_000).length, 3);
+  assert.ok(t.clock.t - (t0 + 66 * 60_000) < 60_000, `${(t.clock.t - t0 - 66 * 60_000) / 1000} s after the second wait`);
+  assert.ok(t.clock.slept.every((ms) => ms <= 30_000), "no sleep longer than a poll");
   t.p.cleanup();
 });
 

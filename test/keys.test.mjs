@@ -11,7 +11,7 @@ import { next, overrule, reset, resume, start } from "../scripts/lib/verbs.mjs";
 import { watchLoop } from "../scripts/lib/watch.mjs";
 import { main, parseCli } from "../scripts/rider.mjs";
 import { FakeBinding } from "./fake-binding.mjs";
-import { FakeClock, INSTANCE_RIDER_MD, TEST_RIDER_MD, limitSoon, makeCtx, settled, tmpProject } from "./helpers.mjs";
+import { FakeClock, INSTANCE_RIDER_MD, TEST_RIDER_MD, limitSoon, makeCtx, settled, tmpProject, wake } from "./helpers.mjs";
 
 const done = (status, extra = {}) => ({ statuses: ["done"], read: { lastText: `STATUS: ${status}\n<promise>X</promise>`, turns: 5, ...extra } });
 /** A well-formed run id that is not `r`. */
@@ -196,7 +196,7 @@ test("check prints the exact decide-with line", (t) => {
   assert.ok(ca.decideWith.includes(` --rider lemmaria --instance a --on ${s}.1 `), ca.decideWith);
 });
 
-test("the watcher's resume after the run moved on is refused quietly", (t) => {
+test("the watcher's resume after the run moved on is refused, and the watcher goes back to what the run now runs", (t) => {
   const p = tmpProject();
   t.after(p.cleanup);
   const clock = new FakeClock();
@@ -217,15 +217,17 @@ test("the watcher's resume after the run moved on is refused quietly", (t) => {
     return update(fn);
   };
   const logs = [];
-  assert.equal(watchLoop(watcher, { pollMs: 30_000, log: (m) => logs.push(m) }), null);
+  // The judge's stop ended the run, so the current stretch the watcher returns to is none, and it exits there.
+  assert.equal(watchLoop(watcher, { pollMs: 30_000, log: (m) => logs.push(m) }).state, "none");
   assert.equal(decided, true);
   assert.equal(binding.calls.filter((c) => c.call === "resume").length, 0, "no resume reaches the binding");
-  assert.ok(logs.includes("the run moved on while waiting; exiting"), logs.join("\n"));
+  assert.deepEqual(logs.slice(-2), ["the run moved on while waiting; watching its current stretch", "nothing to watch (none)"]);
+  assert.deepEqual(wake(watcher), [], "no wake event for a stretch the judge already decided");
   const last = watcher.readEvents().at(-1);
   assert.deepEqual([last.kind, last.runId, last.phase, last.key], ["refused", r, null, `${r}.1`], "the watcher's refused resume is on file like any other");
 });
 
-test("a reset between the watcher's check and its wait ends the watch quietly", (t) => {
+test("a reset between the watcher's check and its wait ends the watch at its next tick", (t) => {
   const p = tmpProject();
   t.after(p.cleanup);
   const clock = new FakeClock();
@@ -243,10 +245,13 @@ test("a reset between the watcher's check and its wait ends the watch quietly", 
     return out;
   };
   const logs = [];
-  assert.equal(watchLoop(watcher, { pollMs: 30_000, log: (m) => logs.push(m) }), null);
+  assert.equal(watchLoop(watcher, { pollMs: 30_000, log: (m) => logs.push(m) }).state, "none");
   assert.equal(wasReset, true);
-  assert.ok(logs.includes("the run moved on while waiting; exiting"), logs.join("\n"));
+  assert.deepEqual(logs.slice(-2), ["the run moved on while waiting; watching its current stretch", "nothing to watch (none)"]);
+  // One tick, not the whole wait: the reset was seen at the first state read.
+  assert.deepEqual(clock.slept.slice(-1), [30_000]);
   assert.equal(binding.calls.filter((c) => c.call === "resume").length, 0);
+  assert.deepEqual(wake(watcher), []);
 });
 
 test("through the CLI both refusals exit 2: a malformed key leaves no trace, a stale one prints where the instance is now", (t) => {
