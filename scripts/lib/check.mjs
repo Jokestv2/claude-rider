@@ -224,7 +224,7 @@ function checkHuman(ctx, run, def) {
     return { state: "none", ended: { runId: run.runId, phase: run.phase, reason }, lastRun: run };
   }
   // The check runs inside the hold, since its exit decides whether the run ends; `show` only informs (`readouts`).
-  return { state: "human", rider: run.rider, runId: run.runId, key: null, phase: run.phase, check: def.check, checkExit: r.status, checkOutput: r.output, show: null, notes: run.notes, totalCost: totalCost(run), [RUN]: run };
+  return { state: "human", rider: run.rider, runId: run.runId, key: null, phase: run.phase, check: def.check, checkExit: r.status, checkOutput: r.output, show: null, notes: run.notes, totalCost: totalCost(run), ...driftOf(run), [RUN]: run };
 }
 
 /** Gate precision, mechanically: the commits that landed after the sessions handed over — every one is
@@ -238,6 +238,9 @@ function noteAfterHandoff(ctx, run, branchTip) {
   const commits = ctx.commitsBetween(run.handoff.tip, ref);
   if (commits) run.handoff.after = { ref, commits };
 }
+
+/** What `check` says of the shared tree (§11.1): the judge bound to one instance sees the drift its board row shows. */
+const driftOf = (run) => ({ baseBranch: run.baseBranch ?? null, branchDrift: run.branchDrift ?? null });
 
 export function runEvidence(ctx, run) {
   return ctx.rider.evidence.map((cmd) => ({ cmd, ...sh(cmd, { ...ctx.shellOpts(run), capBytes: EVIDENCE_CAP, timeoutMs: 10_000 }) }));
@@ -259,7 +262,7 @@ function result(ctx, run, sess, outcome, finalText, note = null) {
     doneReason: sess.doneReason ?? null,
     resumes: chainResumes(run.sessions, sess),
     lastResume: sess.resumedFrom ? { reason: sess.resumeReason, at: sess.at } : null,
-    rateLimit: sess.rateLimit ?? null, harness: sess.harness ?? null,
+    rateLimit: sess.rateLimit ?? null, harness: sess.harness ?? null, ...driftOf(run),
     humanTurns: sess.humanTurns ?? 0, humanTurnDetails: sess.humanTurnDetails ?? [], cost: sess.cost ?? null, turns: sess.turns ?? null, elapsedMs: sess.elapsedMs ?? null,
     question: sess.question ?? null, finalText,
     evidence: [], // `readouts` fills it once the lock is released

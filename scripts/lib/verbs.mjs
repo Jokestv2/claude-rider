@@ -239,7 +239,7 @@ export function status(ctx) {
   const sess = currentSession(run);
   const state = def.kind === "human" ? "human" : !sess ? "none" : sess.outcome === "running" ? "running" : sess.outcome === "waiting" ? "waiting" : "finished";
   return {
-    ok: true, state, rider: run.rider, ...where, runId: run.runId, key: currentKey(run), phase: run.phase, visits: run.visits, baseBranch: run.baseBranch ?? null, workBranch: run.workBranch ?? null, workTip: run.workTip ?? null, startedAt: run.startedAt, watcher, lastEvent,
+    ok: true, state, rider: run.rider, ...where, runId: run.runId, key: currentKey(run), phase: run.phase, visits: run.visits, baseBranch: run.baseBranch ?? null, workBranch: run.workBranch ?? null, workTip: run.workTip ?? null, branchDrift: run.branchDrift ?? null, startedAt: run.startedAt, watcher, lastEvent,
     totalCost: totalCost(run),
     sessions: run.sessions.map((s) => ({ key: keyOf(run, s), phase: s.phase, model: s.model, shortId: s.shortId, id: s.id, outcome: s.outcome, cost: s.cost ?? null, turns: s.turns ?? null, at: s.at, resumedFrom: s.resumedFrom ?? null })),
     transitions: run.transitions, notes: run.notes,

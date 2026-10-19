@@ -5,7 +5,8 @@ import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { check } from "../scripts/lib/check.mjs";
 import { sh } from "../scripts/lib/shell.mjs";
-import { next, start } from "../scripts/lib/verbs.mjs";
+import { render, renderCheck } from "../scripts/lib/render.mjs";
+import { next, start, status } from "../scripts/lib/verbs.mjs";
 import { FakeBinding } from "./fake-binding.mjs";
 import { FakeClock, INSTANCE_RIDER_MD, TEST_RIDER_MD, makeCtx, settled, tmpProject } from "./helpers.mjs";
 
@@ -139,6 +140,39 @@ test("an instance rider's drift is refreshed on a stopped stretch awaiting its d
     p.git("checkout -q elsewhere");
     assert.equal(check(a).state, "done");
     assert.equal(a.loadRun().branchDrift?.branch, "elsewhere");
+  } finally { p.cleanup(); }
+});
+
+test("status and check show a recorded drift, in JSON and text, and none once a check finds the base again", () => {
+  const p = sharedBranch();
+  try {
+    const a = on(p, "a", [{ statuses: ["done"], read: { lastText: GATE_GREEN, turns: 5 } }]);
+    assert.equal(start(a, { phase: "close" }).ok, true);
+    p.git("checkout -q -b elsewhere");
+    const stopped = settled(check, a);
+    const drift = { branch: "elsewhere", at: a.loadRun().branchDrift.at };
+    const line = `drift: the shared working tree left main for elsewhere (first seen ${drift.at}) — the executor does not switch back`;
+    assert.deepEqual([stopped.state, stopped.branchDrift], ["done", drift]);
+    const block = renderCheck(stopped).split("\n");
+    assert.ok(block.includes(line), block.join("\n"));
+    assert.equal(block.at(-1), stopped.decideWith, "decide with: is still the block's last line");
+    const st = status(a);
+    assert.deepEqual(st.branchDrift, drift);
+    assert.ok(render("status", st).split("\n").includes(line), render("status", st));
+    assert.doesNotMatch(render("status", st), /· branch main ·/, "the tree is not on main: the headline names it the base");
+
+    // At a human phase, the block a stale drift matters most in: nothing else checks the tree there.
+    assert.equal(next(a, "gate green", { on: stopped.key }).state, "human");
+    const human = check(a);
+    assert.deepEqual([human.state, human.branchDrift], ["human", drift]);
+    assert.ok(render("check", human).split("\n").includes(line), render("check", human));
+
+    p.git("checkout -q main");
+    const back = check(a);
+    assert.deepEqual([back.state, back.branchDrift], ["human", null]);
+    assert.doesNotMatch(render("check", back), /drift:/);
+    assert.equal(status(a).branchDrift, null);
+    assert.doesNotMatch(render("status", status(a)), /drift:/);
   } finally { p.cleanup(); }
 });
 

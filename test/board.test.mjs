@@ -87,11 +87,13 @@ test("every category is produced", (t) => {
   assert.equal(waits("dead"), "watcher not alive");
   assert.equal(waits("limited"), "rate-limited; resumes after 2026-10-01T13:00:00.000Z");
   assert.equal(waits("gaveup"), "rate-limited; the watcher gave up or died");
-  assert.equal(waits("drift"), "the shared working tree left main for feature/x");
+  // Drift annotates the row's own reason: a running stretch is still running, and says so.
+  assert.equal(waits("drift"), `session s1 running · the shared working tree left main for feature/x (first seen ${ago(3)}, as of the instance's last check)`);
   assert.match(waits("stale"), /^undecided for 25 min — its judge has most likely died$/);
   assert.equal(waits("never"), "never run");
   assert.equal(waits("over"), "last run ended done");
-  assert.deepEqual([rows.human.since, rows.stopped.since, rows.stale.since, rows.drift.since], [ago(30), ago(10), ago(25), ago(3)]);
+  assert.deepEqual([rows.human.since, rows.stopped.since, rows.stale.since, rows.drift.since], [ago(30), ago(10), ago(25), ago(60)]);
+  assert.deepEqual([rows.drift.drift, rows.drift.key, rows.running.drift, rows.never.drift], [{ branch: "feature/x", at: ago(3) }, "3f2a.1", null, null]);
 
   // Only a stretch that waits on a decision carries the line to make it, verbatim as `check` prints it.
   const decide = 'decide with:  rider next <label> --instance stale --on 3f2a.1 --because "…"     (labels: code green · blocked · resume · operator)';
@@ -108,6 +110,26 @@ test("every category is produced", (t) => {
   assert.deepEqual(heads.map((l) => l.replace(/ ─+$/, "")), ["── needs you (8)", "── needs its judge (1)", "── running (2)", "── idle (2)"]);
   assert.ok(text.split("\n").some((l) => l.trim() === decide), "the decide-with line, unchanged");
   assert.match(text, /lemmaria\/stale\b[^\n]*undecided for 25 min/);
+});
+
+test("branch drift forces needs you and keeps the row's own reason, key and decide-with line", (t) => {
+  const drift = { branchDrift: { branch: "elsewhere", at: ago(40) } };
+  const p = everyCase(t, {
+    stale: { run: active([stretch("done", { stoppedAt: ago(25) })], drift) },
+    fresh: { run: active([stretch("done", { stoppedAt: ago(2) })], drift) },
+    asks: { run: active([stretch("waiting", { question: { questions: [{ question: "Which schema?" }] } })], drift), watcher: LIVE },
+  });
+  const rows = byInstance(collectBoard(p.root, { now: NOW, alive }));
+  const left = `the shared working tree left main for elsewhere (first seen ${ago(40)}, as of the instance's last check)`;
+  assert.deepEqual([rows.stale.category, rows.stale.waitsOn, rows.stale.since], ["needs you", `undecided for 25 min — its judge has most likely died · ${left}`, ago(25)]);
+  assert.equal(rows.stale.key, "3f2a.1");
+  assert.equal(rows.stale.decideWith, 'decide with:  rider next <label> --instance stale --on 3f2a.1 --because "…"     (labels: code green · blocked · resume · operator)');
+  // A stretch its judge is about to decide still needs the operator: the tree its evidence reads is not the base.
+  assert.deepEqual([rows.fresh.category, rows.fresh.waitsOn], ["needs you", `its judge's decision on the done stretch · ${left}`]);
+  assert.ok(rows.fresh.decideWith);
+  assert.deepEqual([rows.asks.category, rows.asks.waitsOn, rows.asks.decideWith], ["needs you", `question: Which schema? · ${left}`, null]);
+  for (const id of ["stale", "fresh", "asks"]) assert.deepEqual(rows[id].drift, { branch: "elsewhere", at: ago(40) }, id);
+  assert.match(render("board", collectBoard(p.root, { now: NOW, alive })), /lemmaria\/asks [^\n]*question: Which schema\? · the shared working tree left main for elsewhere/);
 });
 
 test("a rate-limited stretch a human turn reached reads intervened, as check reads it", (t) => {

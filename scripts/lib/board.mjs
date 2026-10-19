@@ -21,9 +21,22 @@ const minutes = (ms) => Math.floor(ms / 60_000);
 const firstQuestion = (q) => q?.questions?.[0]?.question ?? "asked in prose";
 
 /** Which group an instance's row goes in, what it waits on and since when (§10). Pure: the clock, the stale line and
- *  the watcher's liveness come in, so a test can place a row in every group. The first rule that matches wins. `key`
- *  is the active run's latest stretch; `labels` come only with a stretch that waits on a decision. */
-export function categorize(state, rider, { now, staleMs, watcherAlive: live }) {
+ *  the watcher's liveness come in, so a test can place a row in every group. Branch drift (§11.1) annotates the row
+ *  rather than replacing it: the tree is shared, so one line would otherwise hide every instance's own question or
+ *  undecided stretch. It still makes the row the operator's. */
+export function categorize(state, rider, opts) {
+  const c = ownCategory(state, rider, opts);
+  const drift = state?.run?.branchDrift;
+  if (!drift) return { ...c, drift: null };
+  // `at` is the first sighting: no check rewrites it while the tree stays put, so the board, which never calls git,
+  // knows only that the instance's last check still found it there.
+  const left = `the shared working tree left ${state.run.baseBranch ?? "?"} for ${drift.branch} (first seen ${drift.at}, as of the instance's last check)`;
+  return { ...c, category: "needs you", waitsOn: `${c.waitsOn} · ${left}`, drift: { branch: drift.branch, at: drift.at } };
+}
+
+/** The row as if the tree were on its base. The first rule that matches wins. `key` is the active run's latest
+ *  stretch; `labels` come only with a stretch that waits on a decision. */
+function ownCategory(state, rider, { now, staleMs, watcherAlive: live }) {
   const row = (category, waitsOn, since, key = null, labels = null) => ({ category, waitsOn, since: since ?? null, key, labels });
   const run = state?.run;
   if (!run) {
@@ -32,7 +45,6 @@ export function categorize(state, rider, { now, staleMs, watcherAlive: live }) {
     return row("idle", last ? `last run ended ${last.endedBy}` : "never run", last?.endedAt);
   }
   const key = currentKey(run);
-  if (run.branchDrift) return row("needs you", `the shared working tree left ${run.baseBranch ?? "?"} for ${run.branchDrift.branch}`, run.branchDrift.at, key);
   const def = rider.phases[run.phase];
   if (def?.kind === "human") return row("needs you", `human check: ${def.check}`, run.handoff?.at, key);
   const sess = currentSession(run);
@@ -90,6 +102,7 @@ function rowOf(root, rider, { id, scope, orphaned, declared, multiRider, now, st
     key: c.key,
     // Not for an orphan: `next` refuses its id, so the line would not run as printed.
     decideWith: c.labels && !orphaned ? decideWithLine({ rider: rider.name, multiRider, instance: id, declared, key: c.key, labels: c.labels }) : null,
+    drift: c.drift,
     watcher, updatedAt: state.updatedAt ?? null, statePath: paths.state,
   };
 }
