@@ -7,7 +7,7 @@ import { check } from "../scripts/lib/check.mjs";
 import { render } from "../scripts/lib/render.mjs";
 import { next, note, overrule, reset, start, status } from "../scripts/lib/verbs.mjs";
 import { FakeBinding } from "./fake-binding.mjs";
-import { FakeClock, TEST_RIDER_MD, makeCtx, tmpProject } from "./helpers.mjs";
+import { FakeClock, INSTANCE_RIDER_MD, TEST_RIDER_MD, makeCtx, tmpProject } from "./helpers.mjs";
 
 const done = (lastText, extra = {}) => ({ statuses: ["done"], read: { lastText, turns: 5, ...extra } });
 const GATE = "STATUS: gate green\n<promise>MILESTONE GATE GREEN</promise>";
@@ -45,6 +45,17 @@ test("842b: the ruling revives the stopped run, takes the edge, and the merge ch
     assert.deepEqual([ctx.lastEndedRun().runId, ctx.lastEndedRun().endedBy, readdirSync(ctx.paths.runs).length], [runId, "done", 1]);
     assert.equal(status(ctx).lastRun.totalCost, 33, "and it still carries what its sessions cost");
   } finally { p.cleanup(); }
+});
+
+test("the printed overrule move names the rider and the instance whenever the CLI needs them", (t) => {
+  const p = tmpProject({ riderMd: INSTANCE_RIDER_MD, instances: ["a"] });
+  t.after(p.cleanup);
+  const ctx = makeCtx({ root: p.root, instance: "a", riderCount: 2, binding: new FakeBinding({ script: [done(GATE)] }) });
+  start(ctx, { phase: "close" });
+  const stop = next(ctx, "operator", { on: check(ctx).key, because: "asked for a ruling" });
+  const move = `rider overrule "<label>" --rider lemmaria --instance a --because "…" --on ${stop.runId}`;
+  assert.ok(render("next", stop).includes(move), render("next", stop));
+  assert.ok(render("status", status(ctx)).includes(move), render("status", status(ctx)));
 });
 
 test("overrule into a session phase launches it like any edge", () => {

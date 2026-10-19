@@ -42,8 +42,15 @@ export function nowLine(snap) {
   return `phase ${snap.phase} · run ${snap.runId} · latest ${snap.key ?? "none"} (${snap.outcome ?? "no session"}) · last: ${transitionText(snap.lastTransition)}`;
 }
 
+/** What a printed command needs to run as printed (decision 15): `--rider` when the project has several riders,
+ *  `--instance` when the rider declares instances. Empty when the CLI needs neither. */
+export function targetFlags({ rider, multiRider, instance, declared }) {
+  return [multiRider ? `--rider ${rider}` : null, declared ? `--instance ${instance}` : null].filter(Boolean).join(" ");
+}
+
 /** The command `check` prints for the judge to copy (§8): a key assembled by hand is how a stale one gets typed. It
  *  names the rider and the instance whenever the CLI would need them, so it runs as printed. */
 export function decideWithLine({ rider, multiRider, instance, declared, key, labels }) {
-  return `decide with:  rider next <label>${multiRider ? ` --rider ${rider}` : ""}${declared ? ` --instance ${instance}` : ""} --on ${key} --because "…"     (labels: ${labels.join(" · ")})`;
+  const flags = targetFlags({ rider, multiRider, instance, declared });
+  return `decide with:  rider next <label>${flags ? ` ${flags}` : ""} --on ${key} --because "…"     (labels: ${labels.join(" · ")})`;
 }

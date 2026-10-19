@@ -1,7 +1,7 @@
 // scripts/lib/verbs.mjs
 import { readFileSync } from "node:fs";
 import { RUN, readouts } from "./check.mjs";
-import { currentKey, nowLine, parseRunKey, parseStretchKey, snapshot } from "./keys.mjs";
+import { currentKey, nowLine, parseRunKey, parseStretchKey, snapshot, targetFlags } from "./keys.mjs";
 import { legalLabels, onwardEdges, overrulable } from "./rider-md.mjs";
 import { sh } from "./shell.mjs";
 import { currentSession, keyOf, newRun, scopeOf, totalCost } from "./state.mjs";
@@ -56,6 +56,8 @@ function staleActive(run, on) {
 
 const labelList = (ctx, phase) => legalLabels(ctx.rider, phase).map((l) => l.label).join(" · ");
 const sessionName = (run, instance, phase) => `rider ${run.rider}/${instance}/${run.runId} ${phase}`;
+/** What the operator moves a result prints need in order to run as printed: the same flags as `decide with` (decision 15). */
+const flagsOf = (ctx) => targetFlags({ rider: ctx.rider.name, multiRider: ctx.riderCount > 1, instance: ctx.instance.id, declared: !!ctx.instance.declared });
 
 /** §12: a phase prompt is shared by every instance and sent verbatim, so which instance a run serves reaches the
  *  session as a line of appended system text. A rider without `instances` has one instance and nothing to tell. */
@@ -153,7 +155,7 @@ export function next(ctx, label, { on, because = null, by = "judge", dryRun = fa
     if (to === "operator") {
       const reason = because ?? `${label} from ${run.phase}`;
       ctx.endRun(run, { endedBy: "operator", reason });
-      return { ok: true, state: "operator", runId: run.runId, reason, overrulable: overrulable(ctx.rider, run), totalCost: totalCost(run) };
+      return { ok: true, state: "operator", runId: run.runId, reason, overrulable: overrulable(ctx.rider, run), targetFlags: flagsOf(ctx), totalCost: totalCost(run) };
     }
     return enterPhase(ctx, run, to, { dryRun });
   }));
@@ -232,7 +234,7 @@ export function status(ctx) {
   const watcher = ctx.watcherAlive();
   const lastEvent = ctx.readEvents().at(-1) ?? null;
   const where = { instance: ctx.instance.id, scope: ctx.instance.scope };
-  if (!run) return { ok: true, state: "none", rider: ctx.rider.name, ...where, watcher, lastEvent, lastRun };
+  if (!run) return { ok: true, state: "none", rider: ctx.rider.name, ...where, targetFlags: flagsOf(ctx), watcher, lastEvent, lastRun };
   const def = ctx.rider.phases[run.phase];
   const sess = currentSession(run);
   const state = def.kind === "human" ? "human" : !sess ? "none" : sess.outcome === "running" ? "running" : sess.outcome === "waiting" ? "waiting" : "finished";

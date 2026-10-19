@@ -5,7 +5,7 @@ import { readJson, writeJsonAtomic } from "./store.mjs";
 
 /** Machine facts and overrides (§4.2), one file per rider (`riderPaths(...).local`). Keys not listed here are kept but unused. */
 export function loadLocal(rp) {
-  return { maxWaitHours: 6, pollSeconds: 30, models: {}, advisor: null, launchArgs: [], claudePath: null, shell: null, permissionMode: "auto", ...readJson(rp.local, {}) };
+  return { maxWaitHours: 6, pollSeconds: 30, models: {}, advisor: null, launchArgs: [], claudePath: null, shell: null, permissionMode: "auto", staleDecisionMinutes: 20, ...readJson(rp.local, {}) };
 }
 export function newRun({ rider, phase, baseBranch, now }) {
   return { rider, runId: randomBytes(2).toString("hex"), startedAt: now.toISOString(), baseBranch: baseBranch ?? null, phase, visits: {}, transitions: [], sessions: [], notes: [] };

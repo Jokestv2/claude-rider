@@ -127,13 +127,20 @@ Its presence makes that older executor fail on every verb instead of reporting n
 The current layout keeps each instance's state in <instance>/state.json next to this directory.
 Do not remove it while an older executor might still be run against this project.
 `;
+/** Why a rider's state is v3's and not read (§16), or null. A directory at run.json is v4's own guard (§6.4). It only
+ *  reads, so the board can report v3 state without leaving a guard behind. */
+export function v3Refusal(rp) {
+  let st = null;
+  try { st = statSync(rp.v3Run); } catch (e) { if (e.code !== "ENOENT") throw e; }
+  if (!st || st.isDirectory()) return null;
+  return `${rp.v3Run} is state from an older claude-rider, which this version does not read. Finish or reset that run with the old version first, then remove ${rp.dir}/ (move its runs/ aside first to keep the history).`;
+}
 /** v4 refuses v3 state (§16), and the directory it leaves at run.json makes a stale v3 executor fail on every verb
  *  with EISDIR instead of seeing no run and launching a paid session (§6.4). A directory there is that guard. */
 export function guardV3(rp) {
-  let st = null;
-  try { st = statSync(rp.v3Run); } catch (e) { if (e.code !== "ENOENT") throw e; }
-  if (st?.isDirectory()) return;
-  if (st) throw new Error(`${rp.v3Run} is state from an older claude-rider, which this version does not read. Finish or reset that run with the old version first, then remove ${rp.dir}/ (move its runs/ aside first to keep the history).`);
+  const refusal = v3Refusal(rp);
+  if (refusal) throw new Error(refusal);
+  if (existsSync(rp.v3Run)) return;
   mkdirSync(rp.v3Run, { recursive: true });
   writeFileSync(join(rp.v3Run, "README"), GUARD_README);
 }

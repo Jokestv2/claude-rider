@@ -30,7 +30,7 @@ test("a run is created, saved, ended into runs/, and found again as the last end
     const log = writeLog(ctx.paths, "x.json", { a: 1 });
     assert.ok(existsSync(log));
     assert.deepEqual(readJson(log), { a: 1 });
-    assert.deepEqual(loadLocal(riderPaths(p.root, "lemmaria")), { maxWaitHours: 6, pollSeconds: 30, models: {}, advisor: null, launchArgs: [], claudePath: null, shell: null, permissionMode: "auto" });
+    assert.deepEqual(loadLocal(riderPaths(p.root, "lemmaria")), { maxWaitHours: 6, pollSeconds: 30, models: {}, advisor: null, launchArgs: [], claudePath: null, shell: null, permissionMode: "auto", staleDecisionMinutes: 20 });
   } finally { p.cleanup(); }
 });
 

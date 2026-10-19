@@ -3,12 +3,13 @@
 import { existsSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
+import { collectBoard, hasState } from "./lib/board.mjs";
 import { check } from "./lib/check.mjs";
 import { createContext } from "./lib/context.mjs";
 import { render } from "./lib/render.mjs";
 import { discoverRiders, listInstances, loadRider } from "./lib/rider-md.mjs";
 import { loadLocal } from "./lib/state.mjs";
-import { guardV3, riderPaths } from "./lib/store.mjs";
+import { guardV3, instancePaths, readState, riderPaths } from "./lib/store.mjs";
 import * as verbs from "./lib/verbs.mjs";
 import { awaitEvent, watchLoop } from "./lib/watch.mjs";
 
@@ -24,9 +25,11 @@ const USAGE = `rider — drive riders/<name>/RIDER.md one phase at a time (run f
   rider note "…"                      append to the run record (the last ended run when none is active)
   rider reset --on <runId>            forget the active run (its record stays under .rider/<name>/<instance>/runs/)
   rider watch                         the detached watcher itself (spawned by start/next/resume/check)
+  rider board                         every instance of every rider, needs-you first (no --rider, no --instance)
 
   --rider <directory name>   when the project has several riders   --json   machine-readable output
-  --instance <id>  which instance: required when the rider declares instances, else omitted (or default)
+  --instance <id>  which instance: required when the rider declares instances, else omitted (or default);
+                   an orphaned id (state, but no directory) is accepted by status and reset only
   --on <key>       what the decision judged: <runId>.<n> for next and resume (check prints it), <runId> for overrule and reset;
                    refused when the instance has moved on since
   --by judge|operator  who decided, recorded on the transition (default judge; operator for the operator's own ruling)
@@ -60,6 +63,11 @@ export async function main(argv = process.argv.slice(2), { cwd = process.cwd(), 
   if (cli.flags.help) { stdout(USAGE); return 0; }
   // Every failure before or during dispatch is a refusal: one line (a JSON object under --json), exit 2 — never a stack trace.
   const fail = (message) => { if (cli.flags.json) stdout(JSON.stringify({ ok: false, error: message })); else stderr(message); return 2; };
+  // Every rider and every instance (§10): before a rider is picked, so --rider and --instance mean nothing here. A read:
+  // no binding, no lock, no v3 guard written.
+  if (cli.verb === "board") {
+    try { const b = collectBoard(cwd); stdout(cli.flags.json ? JSON.stringify(b, null, 2) : render("board", b)); return 0; } catch (e) { return fail(e.message); }
+  }
   // The executor records its own stops itself; by hand, a decision is a judge's or the operator's (§9).
   if (cli.flags.by !== undefined && cli.flags.by !== "judge" && cli.flags.by !== "operator") return fail(`--by is judge or operator, not "${cli.flags.by}"\n${USAGE}`);
   const riders = discoverRiders(cwd);
@@ -75,6 +83,8 @@ export async function main(argv = process.argv.slice(2), { cwd = process.cwd(), 
   try {
     const rider = loadRider(found.file);
     const instance = resolveInstance(cwd, rider, cli.flags.instance);
+    // An orphan can be inspected and cleared, nothing more (§9): nothing else may act for a directory that is gone.
+    if (instance.orphaned && cli.verb !== "status" && cli.verb !== "reset") return fail(`instance ${instance.id} has state but no directory (orphaned) — only status and reset accept it`);
     const rp = riderPaths(cwd, rider.name);
     guardV3(rp);
     const local = loadLocal(rp);
@@ -111,18 +121,18 @@ export async function main(argv = process.argv.slice(2), { cwd = process.cwd(), 
 }
 
 /** The instance a verb acts on (§9). Matched against the directories that exist, never just checked for shape: the
- *  id becomes a path under .rider/, and a guess at an id must not create state for an instance nobody declared. */
+ *  id becomes a path under .rider/, and a guess at an id must not create state for an instance nobody declared. An id
+ *  with state but no directory (renamed or deleted) is an orphan: `main` lets only status and reset take it. */
 export function resolveInstance(root, rider, id = null) {
   const { declared, instances } = listInstances(root, rider);
-  if (!declared) {
-    if (id == null || id === "default") return { id: "default", scope: ".", declared: false };
-    throw new Error(`${rider.name} declares no instances — omit --instance`);
-  }
+  if (!declared && (id == null || id === "default")) return { id: "default", scope: ".", declared: false };
+  const found = declared ? instances.find((i) => i.id === id) : null;
+  if (found) return { id: found.id, scope: found.scope, declared: true };
+  if (hasState(root, rider.name, id)) return { id, scope: readState(instancePaths(root, rider.name, id))?.scope ?? null, declared: true, orphaned: true };
+  if (!declared) throw new Error(`${rider.name} declares no instances — omit --instance`);
   const have = instances.map((i) => i.id).join(", ") || "none";
   if (id == null) throw new Error(`${rider.name} declares instances — pass --instance <id>; have: ${have}`);
-  const found = instances.find((i) => i.id === id);
-  if (!found) throw new Error(`${rider.name} has no instance "${id}" — pass --instance <id>; have: ${have}`);
-  return { id: found.id, scope: found.scope, declared: true };
+  throw new Error(`${rider.name} has no instance "${id}" — pass --instance <id>; have: ${have}`);
 }
 
 /** The watcher process. Its pid file is written and removed under the instance lock, like every other write; the

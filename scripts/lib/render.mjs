@@ -14,11 +14,12 @@ export function render(verb, r) {
   // A stale decision (§8) also says where the instance is now, so the decider sees what it missed before it decides again.
   if (r?.ok === false && r.error) return r.stale && r.current ? `refused: ${r.error}\nnow: ${nowLine(r.current)}` : `refused: ${r.error}`;
   if (verb === "status") return renderStatus(r); // before the state switch: status has its own none/human shapes
+  if (verb === "board") return renderBoard(r);
   switch (r?.state) {
     case "none": return renderNone(r);
     case "human": return renderHuman(r);
     case "dry-run": return r.argv ? `[dry-run] ${r.phase} (${r.model}): ${r.argv.map((a) => (/\s/.test(a) ? JSON.stringify(a.length > 60 ? `${a.slice(0, 57)}…` : a) : a)).join(" ")}` : `[dry-run] ${r.phase ?? r.to}`;
-    case "operator": return [`run ${r.runId} stopped at operator: ${r.reason}`, `total cost: ${fmtCost(r.totalCost ?? 0)}`, "the operator directs what happens next:", ...operatorMoves(r.overrulable, r.runId)].join("\n");
+    case "operator": return [`run ${r.runId} stopped at operator: ${r.reason}`, `total cost: ${fmtCost(r.totalCost ?? 0)}`, "the operator directs what happens next:", ...operatorMoves(r.overrulable, r.runId, r.targetFlags)].join("\n");
     case "noted": return `noted (${r.notes} notes on ${r.ended ? "ended " : ""}run ${r.runId})`;
     case "event": return r.events.length ? r.events.map(eventLine).join("\n") : `no new event: ${r.reason}`;
     case "timeout": return `no event in ${r.minutes} min; the phase is still running — re-arm rider await`;
@@ -30,10 +31,11 @@ export function render(verb, r) {
 
 /** Everything the operator can do after an `operator` stop, spelled as commands that exist: a judge
  *  left to describe the way out invents one (842b's told the operator to `rider start merge`, which the
- *  executor refuses). `labels` is what `overrule` would accept — empty when the executor made the stop. */
-function operatorMoves(labels, runId) {
+ *  executor refuses). `labels` is what `overrule` would accept — empty when the executor made the stop.
+ *  `flags` are the verb's `--rider`/`--instance` (`targetFlags`), so the overrule runs as printed. */
+function operatorMoves(labels, runId, flags = "") {
   const moves = [];
-  if (labels?.length) moves.push([`rider overrule "<label>" --because "…" --on ${runId}`, `the phase's outcome stands after all: revive this run and take that edge (${labels.join(" · ")})`]);
+  if (labels?.length) moves.push([`rider overrule "<label>"${flags ? ` ${flags}` : ""} --because "…" --on ${runId}`, `the phase's outcome stands after all: revive this run and take that edge (${labels.join(" · ")})`]);
   moves.push(["rider start [phase]", "a fresh run, once what stopped this one is dealt with"]);
   const width = Math.max(...moves.map(([cmd]) => cmd.length)) + 3;
   return moves.map(([cmd, what]) => `  ${cmd.padEnd(width)}${what}`);
@@ -65,7 +67,7 @@ function renderStatus(r) {
   if (r.state === "none") {
     const L = [`rider ${r.rider} · no active run`];
     if (r.lastRun) L.push(`last run ${r.lastRun.runId} ended at ${r.lastRun.endedBy} (phase ${r.lastRun.phase}): ${r.lastRun.reason ?? ""}   cost ${fmtCost(r.lastRun.totalCost)}`);
-    if (r.lastRun?.endedBy === "operator") L.push("next, on the operator's word:", ...operatorMoves(r.lastRun.overrulable, r.lastRun.runId));
+    if (r.lastRun?.endedBy === "operator") L.push("next, on the operator's word:", ...operatorMoves(r.lastRun.overrulable, r.lastRun.runId, r.targetFlags));
     else L.push("next: rider start [phase]");
     return L.join("\n");
   }
@@ -77,6 +79,29 @@ function renderStatus(r) {
   if (r.attach) L.push(`attach: ${r.attach}`);
   L.push(`next: ${{ running: "arm rider await (background) and stop", waiting: "rider check, relay the question, arm rider await", finished: "rider check, then the command its decide-with line prints", human: "rider check (runs the phase's check command)" }[r.state]}`);
   return L.join("\n");
+}
+
+/** The board (§10), one group per category in the order the rows come sorted, needs-you first. Ages are read against
+ *  `generatedAt`, so the text says what the JSON says. A row's `decide with` line is printed whole, as `check` prints it. */
+function renderBoard(b) {
+  const now = new Date(b.generatedAt).getTime();
+  const age = (at) => (at ? fmtDuration(now - new Date(at).getTime()) : null);
+  const L = [];
+  if (b.errors.length) L.push(RULE(`errors (${b.errors.length})`), ...b.errors.map((e) => `  ${e.rider}${e.instance ? `/${e.instance}` : ""}: ${e.error.split("\n").join("\n    ")}`));
+  const groups = new Map();
+  for (const r of b.rows) groups.set(r.category, [...(groups.get(r.category) ?? []), r]);
+  for (const [category, rows] of groups) {
+    L.push(RULE(`${category} (${rows.length})`));
+    for (const r of rows) {
+      L.push(`  ${r.rider}/${r.instance}  ${[r.scope, r.phase && `phase ${r.phase}`, age(r.since), r.waitsOn].filter(Boolean).join(" · ")}`);
+      const d = r.decision ? `${r.decision.label} by ${r.decision.by ?? "?"}${r.decision.because ? `: ${r.decision.because}` : ""}` : "none";
+      const cost = r.runCost == null ? "no run" : `run ${fmtCost(r.runCost)}`;
+      L.push(`    last decision: ${d}   cost: ${cost} · instance ${fmtCost(r.instanceCost)}   watcher: ${r.watcher ? `pid ${r.watcher}` : "none"}${r.updatedAt ? `   updated ${age(r.updatedAt)} ago` : ""}`);
+      if (r.decideWith) L.push(`    ${r.decideWith}`);
+    }
+  }
+  if (b.skipped.length) L.push(RULE(`skipped (${b.skipped.length})`), ...b.skipped.map((s) => `  ${s.rider}: ${s.path} — ${s.reason}`));
+  return L.length ? L.join("\n") : "no riders/*/RIDER.md here — nothing on the board";
 }
 
 export function renderCheck(r) {
