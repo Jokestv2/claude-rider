@@ -1,7 +1,7 @@
 // test/render.test.mjs
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { render, renderCheck } from "../scripts/lib/render.mjs";
+import { eventLine, render, renderCheck } from "../scripts/lib/render.mjs";
 
 const done = {
   state: "done", outcome: "done", note: null, rider: "lemmaria", runId: "3f2a", phase: "build", visit: 1,
@@ -93,11 +93,21 @@ test("running, none, human and refusal render short", () => {
   assert.match(render("await", { ok: false, state: "timeout", minutes: 60 }), /no event in 60 min/);
 });
 
-test("status renders both branches, and an old run still renders", () => {
+test("status renders both branches, and a run with no base", () => {
   const base = { rider: "lemmaria", runId: "c84c", phase: "build", visits: { build: 1 }, startedAt: "2026-09-06T06:37:37.845Z", state: "running", watcher: 33268, sessions: [], totalCost: 0 };
   assert.match(render("status", { ...base, baseBranch: "main", workBranch: "feature/r4-grounding" }), /· base main → work feature\/r4-grounding ·/);
   assert.match(render("status", { ...base, baseBranch: "main", workBranch: null }), /· branch main ·/);
-  // The in-flight run c84c: only the legacy field exists.
-  assert.match(render("status", { ...base, branch: "main" }), /· branch main ·/);
+  // The legacy `branch` field is no longer read (§15): only `baseBranch` names the base.
+  assert.match(render("status", { ...base, branch: "main" }), /· branch \? ·/);
   assert.match(render("status", { ...base }), /· branch \? ·/);
+});
+
+test("an event renders as one line: at, kind, rider/instance/runId, phase, key, text", () => {
+  const e = { seq: 4, at: "2026-10-19T12:00:00.000Z", rider: "lemmaria", instance: "default", runId: "3f2a", kind: "done", phase: "build", key: "3f2a.2", text: "STATUS: code green" };
+  assert.equal(eventLine(e), "2026-10-19T12:00:00.000Z done lemmaria/default/3f2a build 3f2a.2 STATUS: code green");
+  // Absent fields are left out, an unknown run reads "?", and a multi-line text stays on its line.
+  assert.equal(eventLine({ ...e, kind: "watcher-stopped", runId: null, phase: null, key: null, text: "watcher giving up:\nboom" }), "2026-10-19T12:00:00.000Z watcher-stopped lemmaria/default/? watcher giving up: boom");
+  assert.equal(render("await", { ok: true, state: "event", events: [e, { ...e, kind: "gone", text: "" }] }), `${eventLine(e)}\n2026-10-19T12:00:00.000Z gone lemmaria/default/3f2a build 3f2a.2`);
+  const status = { rider: "lemmaria", runId: "3f2a", phase: "build", visits: { build: 1 }, startedAt: e.at, state: "finished", watcher: null, sessions: [], totalCost: 0, baseBranch: "main", lastEvent: e };
+  assert.match(render("status", status), new RegExp(`last event: ${eventLine(e)}\n`));
 });

@@ -1,84 +1,36 @@
 // scripts/lib/state.mjs
 import { randomBytes } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { readJson, writeJsonAtomic } from "./store.mjs";
 
-export function statePaths(root, name) {
-  const dir = join(root, ".rider", name);
-  return { dir, run: join(dir, "run.json"), runs: join(dir, "runs"), logs: join(dir, "logs"), events: join(dir, "events.log"), watchPid: join(dir, "watch.pid"), watchLog: join(dir, "logs", "watch.log"), local: join(dir, "local.json") };
+/** Machine facts and overrides (§4.2), one file per rider (`riderPaths(...).local`). Keys not listed here are kept but unused. */
+export function loadLocal(rp) {
+  return { maxWaitHours: 6, pollSeconds: 30, models: {}, advisor: null, launchArgs: [], claudePath: null, shell: null, permissionMode: "auto", ...readJson(rp.local, {}) };
 }
-export function ensureDirs(paths) { for (const d of [paths.dir, paths.runs, paths.logs]) mkdirSync(d, { recursive: true }); }
-/** A corrupt run.json or local.json is undiagnosable from the judge's side unless the throw names it. */
-export function readJson(path, fallback = null) {
-  if (!existsSync(path)) return fallback;
-  const text = readFileSync(path, "utf8");
-  try { return JSON.parse(text); } catch (e) { throw new Error(`${path}: ${e.message}`); }
+export function newRun({ rider, phase, baseBranch, now }) {
+  return { rider, runId: randomBytes(2).toString("hex"), startedAt: now.toISOString(), baseBranch: baseBranch ?? null, phase, visits: {}, transitions: [], sessions: [], notes: [] };
 }
-export function writeJson(path, value) { writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`); }
-export function loadRun(paths) { return readJson(paths.run, null); }
-export function saveRun(paths, run) { writeJson(paths.run, run); }
-/** Machine facts and overrides (§4.2). Keys not listed here are kept but unused. */
-export function loadLocal(paths) {
-  return { maxWaitHours: 6, pollSeconds: 30, models: {}, advisor: null, launchArgs: [], claudePath: null, shell: null, permissionMode: "auto", ...readJson(paths.local, {}) };
-}
-export function newRun({ rider, phase, branch, now }) {
-  // `branch` is a legacy mirror of `baseBranch`: the npm-installed CLI and the plugin copy read the
-  // same run.json and may differ in version, so a run written by the newer one must still render in
-  // the older. Never read the pair by hand: `baseOf(run)` below is its one definition.
-  return { rider, runId: randomBytes(2).toString("hex"), startedAt: now.toISOString(), baseBranch: branch ?? null, branch: branch ?? null, phase, visits: {}, transitions: [], sessions: [], notes: [] };
-}
-/** The branch the run started on, and the ONE definition of the legacy fallback: `baseBranch` on a record
- *  written since the branch pair landed, `branch` on one written before it. Null when the record carries
- *  neither, and for no record at all — each caller adds its own shape for "unknown". It also reads a
- *  `status` result, which carries the same two keys. */
-export function baseOf(run) { return run?.baseBranch ?? run?.branch ?? null; }
 /** What a RIDER.md-declared command (intake, check, show, evidence) is told about the run. */
 export function riderEnv(rider, run) {
   return {
     RIDER_NAME: rider?.name ?? "",
     RIDER_RUN_ID: run?.runId ?? "",
     RIDER_PHASE: run?.phase ?? "",
-    RIDER_BASE_BRANCH: baseOf(run) ?? "",
+    RIDER_BASE_BRANCH: run?.baseBranch ?? "",
     RIDER_WORK_BRANCH: run?.workBranch ?? "",
     RIDER_WORK_TIP: run?.workTip ?? "",
   };
 }
-const endedRunPath = (paths, run) => join(paths.runs, `${run.startedAt.replace(/[:.]/g, "-")}-${run.runId}.json`);
-/** A run ends by a passing human check (`done`), at `operator`, or by `reset`; its record moves to runs/. */
-export function endRun(paths, run, { endedBy, reason = null, now }) {
-  run.endedAt = now.toISOString();
-  run.endedBy = endedBy;
-  run.reason = reason;
-  ensureDirs(paths);
-  writeJson(endedRunPath(paths, run), run);
-  rmSync(paths.run, { force: true });
-  return run;
+export function writeLog(paths, name, data) { const p = join(paths.logs, name); writeJsonAtomic(p, data); return p; }
+/** The decision key of a stretch (§8): the run, then the stretch's 1-based place in `sessions`. */
+export const keyOf = (run, sess) => `${run.runId}.${run.sessions.indexOf(sess) + 1}`;
+/** Whether something is running that a watcher must observe. Asked of the phase kind, not of "has a session": rider
+ *  0.2's await phase is live with no session at all, and adds its case here (§13). */
+export function isLive(run, rider) {
+  if (!run || rider.phases[run.phase]?.kind !== "session") return false;
+  const sess = currentSession(run);
+  return sess?.outcome === "running" || sess?.outcome === "waiting";
 }
-/** Rewrite an ended run's record in place: a note that arrives after the run ended still belongs to it. */
-export function saveEndedRun(paths, run) { writeJson(endedRunPath(paths, run), run); }
-/** The inverse of `endRun`, for `overrule`: the record moves back to run.json and is a live run again.
- *  The ending it undoes is not erased — the transition that caused it stays in `transitions`. */
-export function reviveRun(paths, run) {
-  delete run.endedAt;
-  delete run.endedBy;
-  delete run.reason;
-  saveRun(paths, run);
-  rmSync(endedRunPath(paths, run), { force: true });
-  return run;
-}
-export function lastEndedRun(paths) {
-  if (!existsSync(paths.runs)) return null;
-  const files = readdirSync(paths.runs).filter((f) => f.endsWith(".json")).sort();
-  return files.length ? readJson(join(paths.runs, files[files.length - 1])) : null;
-}
-export function appendEvent(paths, fields, now = new Date()) {
-  const line = [now.toISOString(), ...fields.filter((f) => f !== null && f !== undefined && f !== "")].join(" ").replace(/\r?\n/g, " ");
-  ensureDirs(paths);
-  appendFileSync(paths.events, `${line}\n`);
-  return line;
-}
-export function readEvents(paths) { return existsSync(paths.events) ? readFileSync(paths.events, "utf8").split(/\r?\n/).filter(Boolean) : []; }
-export function writeLog(paths, name, data) { ensureDirs(paths); const p = join(paths.logs, name); writeJson(p, data); return p; }
 export function currentSession(run) {
   for (let i = run.sessions.length - 1; i >= 0; i--) if (run.sessions[i].phase === run.phase) return run.sessions[i];
   return null;

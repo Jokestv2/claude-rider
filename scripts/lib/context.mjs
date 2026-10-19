@@ -1,31 +1,99 @@
 // scripts/lib/context.mjs
-import { appendEvent, endRun, lastEndedRun, loadRun, readEvents, reviveRun, riderEnv, saveEndedRun, saveRun, writeLog } from "./state.mjs";
+import { readdirSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { overrulable } from "./rider-md.mjs";
 import { resolveShell, sh } from "./shell.mjs";
+import { riderEnv, totalCost, writeLog } from "./state.mjs";
+import { acquireLock, appendEvent, emptyState, endedRunPath, instancePaths, readEvents, readJson, readState, writeJsonAtomic, writeState } from "./store.mjs";
 import { ensureWatcher, killWatcher, watcherAlive } from "./watcher-spawn.mjs";
 import { sleepSync } from "./proc.mjs";
 
-/** Everything a verb needs, behind one object so tests can inject a clock, a sleep and a binding. */
-export function createContext({ rider, root, paths, local, binding, now = () => new Date(), sleep = sleepSync, spawnWatcher = null, watcherAlive: aliveFn = null, killWatcher: killFn = null }) {
+/** Everything a verb needs for one instance, behind one object so tests can inject a clock, a sleep and a binding.
+ *  It is also the instance's only writer (§7.1): every write asserts that `update` holds the instance's lock. */
+export function createContext({ rider, instance, root, local, binding, now = () => new Date(), sleep = sleepSync, spawnWatcher = null, watcherAlive: aliveFn = null, killWatcher: killFn = null, lock = {}, riderCount = 1 }) {
+  const paths = instancePaths(root, rider.name, instance.id);
   const shell = resolveShell(local);
-  return {
-    rider, root, paths, local, binding, now, sleep,
-    loadRun: () => loadRun(paths),
-    saveRun: (run) => saveRun(paths, run),
-    endRun: (run, o) => endRun(paths, run, { ...o, now: now() }),
-    lastEndedRun: () => lastEndedRun(paths),
-    saveEndedRun: (run) => saveEndedRun(paths, run),
-    reviveRun: (run) => reviveRun(paths, run),
-    writeLog: (name, data) => writeLog(paths, name, data),
-    appendEvent: (fields) => appendEvent(paths, fields, now()),
+  let depth = 0;
+  let release = null;
+  /** A write outside `update` is an executor bug no user can reach by any verb, so it fails loudly instead of racing. */
+  const locked = (what) => { if (depth === 0) throw new Error(`internal: ${what} outside the instance lock`); };
+  const read = () => readState(paths) ?? emptyState({ rider: rider.name, instance: instance.id, scope: instance.scope });
+  const write = (state) => writeState(paths, state, now());
+  /** What state.json keeps of an ended run: enough to list it, and its start time and id, which name its record in runs/. */
+  const summary = (run) => ({ runId: run.runId, phase: run.phase, startedAt: run.startedAt, endedAt: run.endedAt, endedBy: run.endedBy, reason: run.reason, totalCost: totalCost(run), overrulable: overrulable(rider, run) });
+  /** The newest record in runs/ other than `except`: what `lastRun` falls back to when its run is revived. */
+  const newestEnded = (except) => {
+    let files = [];
+    try { files = readdirSync(paths.runs); } catch (e) { if (e.code !== "ENOENT") throw e; }
+    const rest = files.filter((f) => f.endsWith(".json") && join(paths.runs, f) !== except).sort();
+    return rest.length ? summary(readJson(join(paths.runs, rest.at(-1)))) : null;
+  };
+  const ctx = {
+    rider, instance, root, paths, local, binding, now, sleep, riderCount,
+    /** One hold per verb. Reentrant through the depth count: a verb that calls another (next → resume, start →
+     *  enterPhase → ensureWatcher) must not wait on the lock it already holds. */
+    update(fn) {
+      if (depth === 0) release = acquireLock(paths, { ...lock, now, sleep });
+      depth++;
+      try { return fn(); } finally { if (--depth === 0) { const r = release; release = null; r(); } }
+    },
+    holding: () => depth > 0,
+    /** Readers take no lock: state.json only ever changes by rename (§7.2). */
+    readState: read,
+    loadRun: () => read().run,
+    saveRun(run) { locked("saveRun"); const state = read(); state.run = run; write(state); },
+    /** A run ends by a passing human check (`done`), at `operator`, or by `reset`. Its record goes to runs/ first and
+     *  state.json lets go of it second (§6.3): a crash between the two leaves a duplicate that the next end overwrites. */
+    endRun(run, { endedBy, reason = null }) {
+      locked("endRun");
+      run.endedAt = now().toISOString();
+      run.endedBy = endedBy;
+      run.reason = reason;
+      writeJsonAtomic(endedRunPath(paths, run), run);
+      const state = read();
+      state.run = null;
+      state.lastRun = summary(run);
+      write(state);
+      ctx.event("run-ended", { runId: run.runId, phase: run.phase, text: reason ? `${endedBy}: ${reason}` : endedBy });
+      return run;
+    },
+    lastEndedRun() { const last = read().lastRun; return last ? readJson(endedRunPath(paths, last), null) : null; },
+    /** Rewrite an ended run's record in place: a note that arrives after the run ended still belongs to it. */
+    saveEndedRun(run) {
+      locked("saveEndedRun");
+      writeJsonAtomic(endedRunPath(paths, run), run);
+      const state = read();
+      if (state.lastRun?.runId === run.runId) { state.lastRun = summary(run); write(state); }
+    },
+    /** The inverse of `endRun`, for `overrule`: the record moves back into state.json and is a live run again.
+     *  The ending it undoes is not erased — the transition that caused it stays in `transitions`. State is written
+     *  before the record is removed, so a crash between the two leaves the same harmless duplicate as `endRun`. */
+    reviveRun(run) {
+      locked("reviveRun");
+      delete run.endedAt;
+      delete run.endedBy;
+      delete run.reason;
+      const own = endedRunPath(paths, run);
+      const state = read();
+      state.run = run;
+      state.lastRun = newestEnded(own);
+      write(state);
+      rmSync(own, { force: true });
+      return run;
+    },
+    event(kind, { runId = null, phase = null, key = null, text = "" } = {}) { locked(`event ${kind}`); return appendEvent(paths, { runId, kind, phase, key, text }, now()); },
     readEvents: () => readEvents(paths),
+    writeLog: (name, data) => writeLog(paths, name, data),
     shellOpts: (run = null) => ({ cwd: root, shell, env: { ...process.env, ...riderEnv(rider, run) } }),
     branch: () => { const r = sh("git branch --show-current", { cwd: root, shell }); return r.status === 0 && r.output ? r.output.split("\n")[0].trim() : null; },
     // The ref travels in the environment, never in the command text: a branch name is not shell-safe.
     tip: (ref) => { const r = sh('git rev-parse --verify --quiet "$RIDER_REF^{commit}"', { cwd: root, shell, env: { ...process.env, RIDER_REF: ref } }); return r.status === 0 && /^[0-9a-f]{40,64}$/.test(r.output) ? r.output : null; },
     /** `git log --oneline from..to`, as lines; null when git cannot answer (no repository, an unknown ref). */
     commitsBetween: (from, to) => { const r = sh('git log --oneline "$RIDER_FROM..$RIDER_TO"', { cwd: root, shell, capBytes: 8192, env: { ...process.env, RIDER_FROM: from, RIDER_TO: to } }); return r.status === 0 ? r.output.split("\n").filter(Boolean) : null; },
-    ensureWatcher: () => (spawnWatcher ? spawnWatcher() : ensureWatcher(paths, { riderName: rider.name, root })),
+    /** Under the lock, so two writers cannot both find no watcher and both spawn one, nor race on watch.pid. */
+    ensureWatcher() { locked("ensureWatcher"); return spawnWatcher ? spawnWatcher() : ensureWatcher(paths, { riderName: rider.name, instance: instance.id, root }); },
     watcherAlive: () => (aliveFn ? aliveFn() : watcherAlive(paths)),
-    killWatcher: () => (killFn ? killFn() : killWatcher(paths)),
+    killWatcher() { locked("killWatcher"); return killFn ? killFn() : killWatcher(paths); },
   };
+  return ctx;
 }

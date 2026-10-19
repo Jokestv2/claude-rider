@@ -1,7 +1,7 @@
 // test/verbs-overrule.test.mjs — the operator's ruling on a stop the judge routed to `operator`
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, readdirSync, writeFileSync } from "node:fs";
+import { readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { check } from "../scripts/lib/check.mjs";
 import { render } from "../scripts/lib/render.mjs";
@@ -28,9 +28,9 @@ test("842b: the ruling revives the stopped run, takes the edge, and the merge ch
   try {
     const runId = stop.runId;
     // The stop itself says what can be done about it — nothing is left for the judge to invent.
-    assert.deepEqual(stop.overrule, ["gate green"]);
+    assert.deepEqual(stop.overrulable, ["gate green"]);
     assert.match(render("next", stop), /rider overrule "<label>" --because "…"[^\n]*\(gate green\)\n\s+rider start \[phase\]/);
-    assert.deepEqual(status(ctx).lastRun.overrule, ["gate green"]);
+    assert.deepEqual(status(ctx).lastRun.overrulable, ["gate green"]);
     assert.match(render("status", status(ctx)), /next, on the operator's word:\n\s+rider overrule/);
 
     const r = overrule(ctx, "gate green", { because: "the in-place correction stands; close.md's BLOCKED rule is stricter than practice" });
@@ -91,7 +91,7 @@ test("nothing to overrule: an active run, no run, a reset, a finished run, a sto
     assert.match(overrule(ctx, "planned", { because: "x" }).error, /is active at phase plan — overrule revives a run that stopped at operator/);
     reset(ctx);
     assert.match(overrule(ctx, "planned", { because: "x" }).error, /ended by reset, not at operator/);
-    assert.deepEqual(status(ctx).lastRun.overrule, []);
+    assert.deepEqual(status(ctx).lastRun.overrulable, []);
     clock.t += 60_000; // records are named by start time: two runs started at one frozen instant would tie
     start(ctx, { phase: "close" });
     check(ctx);
@@ -151,7 +151,7 @@ test("a note finds the run it is about: the active one, or the one the merge jus
     assert.match(render("note", late), /^noted \(2 notes on ended run /);
     const rec = ctx.lastEndedRun();
     assert.deepEqual(rec.notes.map((n) => [n.text.slice(0, 10), n.afterEnd ?? false]), [["drove 4 sc", false], ["scenario 3", true]]);
-    assert.equal(existsSync(ctx.paths.run), false, "noting on an ended run does not bring it back");
+    assert.deepEqual([ctx.loadRun(), ctx.readState().lastRun.runId], [null, rec.runId], "noting on an ended run does not bring it back");
     assert.match(note(ctx, " ").error, /note needs text/);
   } finally { p.cleanup(); }
 });

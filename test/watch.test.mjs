@@ -4,12 +4,9 @@ import assert from "node:assert/strict";
 import { awaitEvent, watchLoop } from "../scripts/lib/watch.mjs";
 import { start } from "../scripts/lib/verbs.mjs";
 import { FakeBinding } from "./fake-binding.mjs";
-import { FakeClock, makeCtx, tmpProject } from "./helpers.mjs";
+import { FakeClock, limitSoon, makeCtx, save, tmpProject, wake } from "./helpers.mjs";
 
 const GREEN = "STATUS: planned\n<promise>MILESTONE PLANNED</promise>";
-// A reset `min` minutes after the clock's CURRENT time. Successive limits in one scenario must use
-// increasing offsets: a wall-clock time already passed parses as tomorrow (past the cap).
-const limitSoon = (clock, min = 30) => { const t = new Date(clock.t + min * 60_000); return `You've hit your session limit - resets ${t.getUTCHours()}:${String(t.getUTCMinutes()).padStart(2, "0")} (UTC)`; };
 function setup(script, local = {}) {
   const p = tmpProject();
   const binding = new FakeBinding({ script });
@@ -25,9 +22,10 @@ test("done: the watch polls, emits one line, exits", () => {
   start(t.ctx);
   const r = watchLoop(t.ctx, opts(t));
   assert.equal(r.state, "done");
-  const ev = t.ctx.readEvents();
+  const ev = wake(t.ctx);
   assert.equal(ev.length, 1);
-  assert.match(ev[0], /^2026-09-03T12:0\d:\d\d\.000Z done lemmaria\/[0-9a-f]{4} plan s1 STATUS: planned$/);
+  assert.match(ev[0].at, /^2026-09-03T12:0\d:\d\d\.000Z$/);
+  assert.deepEqual({ ...ev[0], at: null, seq: null }, { seq: null, at: null, rider: "lemmaria", instance: "default", runId: r.runId, kind: "done", phase: "plan", key: `${r.runId}.1`, text: "STATUS: planned" });
   assert.deepEqual(t.clock.slept.filter((ms) => ms === 30_000).length, 2);
   t.p.cleanup();
 });
@@ -40,7 +38,7 @@ test("a rate limit inside the caps: no event, wait to the reset + 1 min, resume,
   assert.equal(r.state, "done");
   assert.equal(r.resumes, 1);
   assert.equal(r.cost, 15);
-  assert.equal(t.ctx.readEvents().length, 1);
+  assert.deepEqual(wake(t.ctx).map((e) => [e.kind, e.key]), [["done", `${r.runId}.2`]]);
   assert.equal(t.binding.calls.filter((c) => c.call === "resume").length, 1);
   assert.ok(t.logs.some((m) => /rate limited; waiting/.test(m)));
   t.p.cleanup();
@@ -53,7 +51,9 @@ test("three resumes, then rate-limited is an event for the operator", () => {
   const r = watchLoop(t.ctx, opts(t));
   assert.equal(r.state, "rate-limited");
   assert.equal(t.binding.calls.filter((c) => c.call === "resume").length, 3);
-  assert.match(t.ctx.readEvents()[0], / rate-limited .* resumed after a rate limit 3 times/);
+  const ev = wake(t.ctx);
+  assert.deepEqual(ev.map((e) => e.kind), ["rate-limited"]);
+  assert.match(ev[0].text, /resumed after a rate limit 3 times/);
   t.p.cleanup();
 });
 
@@ -61,13 +61,15 @@ test("a reset past the cap, or no reset time, is an event at once", () => {
   const far = setup([{ statuses: ["done"], read: { lastText: null, signal: "hit your session limit - resets 11:00pm (UTC)" } }], { maxWaitHours: 6 });
   start(far.ctx);
   assert.equal(watchLoop(far.ctx, { ...opts(far), maxWaitHours: 6 }).state, "rate-limited");
-  assert.match(far.ctx.readEvents()[0], /past the 6h cap/);
+  assert.deepEqual(wake(far.ctx).map((e) => e.kind), ["rate-limited"]);
+  assert.match(wake(far.ctx)[0].text, /past the 6h cap/);
   assert.equal(far.binding.calls.some((c) => c.call === "resume"), false);
   far.p.cleanup();
   const none = setup([{ statuses: ["done"], read: { lastText: null, signal: "API Error: 429 too many requests" } }]);
   start(none.ctx);
   watchLoop(none.ctx, opts(none));
-  assert.match(none.ctx.readEvents()[0], /no reset time/);
+  assert.deepEqual(wake(none.ctx).map((e) => e.kind), ["rate-limited"]);
+  assert.match(wake(none.ctx)[0].text, /no reset time/);
   none.p.cleanup();
 });
 
@@ -81,9 +83,10 @@ test("waiting is emitted once per question and the watch continues to done", () 
   t.binding.read = (ids) => { const h = orig(ids); if (++reads > 30) h.question = null; return h; };
   const r = watchLoop(t.ctx, opts(t));
   assert.equal(r.state, "done");
-  const ev = t.ctx.readEvents();
-  assert.equal(ev.filter((l) => / waiting /.test(l)).length, 1);
-  assert.equal(ev.at(-1).includes(" done "), true);
+  const ev = wake(t.ctx);
+  assert.equal(ev.filter((e) => e.kind === "waiting").length, 1);
+  assert.equal(ev.find((e) => e.kind === "waiting").text, "asked with AskUserQuestion");
+  assert.equal(ev.at(-1).kind, "done");
   t.p.cleanup();
 });
 
@@ -91,7 +94,7 @@ test("gone is an event; the watch exits quietly when there is nothing to watch",
   const t = setup([{ statuses: ["gone"] }]);
   start(t.ctx);
   assert.equal(watchLoop(t.ctx, opts(t)).state, "gone");
-  assert.match(t.ctx.readEvents()[0], / gone /);
+  assert.deepEqual(wake(t.ctx).map((e) => e.kind), ["gone"]);
   const idle = setup([]);
   assert.equal(watchLoop(idle.ctx, opts(idle)).state, "none");
   t.p.cleanup();
@@ -107,7 +110,7 @@ test("the watch survives a transient check failure and carries on", () => {
   const r = watchLoop(t.ctx, opts(t));
   assert.equal(r.state, "done");
   assert.ok(t.logs.some((m) => /check failed \(1\/5\): registry read failed/.test(m)));
-  assert.equal(t.ctx.readEvents().length, 1);
+  assert.deepEqual(wake(t.ctx).map((e) => e.kind), ["done"]);
   t.p.cleanup();
 });
 
@@ -117,9 +120,12 @@ test("five consecutive check failures: the watch emits an event and stops", () =
   t.binding.status = () => { throw new Error("registry unreadable"); };
   const r = watchLoop(t.ctx, opts(t));
   assert.equal(r.ok, false);
-  const ev = t.ctx.readEvents();
+  const { runId } = t.ctx.loadRun();
+  const ev = wake(t.ctx);
   assert.equal(ev.length, 1);
-  assert.match(ev[0], / running lemmaria\/[0-9a-f]{4} plan s1 watcher giving up: registry unreadable$/);
+  // The give-up is its own kind (v3 wrote the session's last outcome): the session may well be running still.
+  assert.deepEqual([ev[0].kind, ev[0].runId, ev[0].phase, ev[0].key, ev[0].text], ["watcher-stopped", runId, "plan", `${runId}.1`, "watcher giving up: registry unreadable"]);
+  assert.deepEqual(r.event, ev[0]);
   t.p.cleanup();
 });
 
@@ -143,17 +149,23 @@ test("await: returns on a new event, at once when the phase is past running, or 
   start(t.ctx);
   let polls = 0;
   const origSleep = t.ctx.sleep;
-  t.ctx.sleep = (ms) => { origSleep(ms); if (++polls === 3) t.ctx.appendEvent(["done", "lemmaria/x", "plan", "s1"]); };
+  t.ctx.sleep = (ms) => {
+    origSleep(ms);
+    // A record event first: await sleeps through it, and wakes on the watcher's kind only.
+    if (++polls === 2) t.ctx.update(() => t.ctx.event("noted", { runId: "x", phase: "plan", text: "not a wake" }));
+    if (polls === 3) t.ctx.update(() => t.ctx.event("done", { runId: "x", phase: "plan", key: "x.1" }));
+  };
   const r = awaitEvent(t.ctx, { maxMinutes: 60, pollMs: 10_000 });
   assert.equal(r.ok, true);
   assert.equal(r.events.length, 1);
-  assert.match(r.events[0], / done lemmaria\/x plan s1$/);
+  assert.deepEqual([r.events[0].kind, r.events[0].runId, r.events[0].phase, r.events[0].key], ["done", "x", "plan", "x.1"]);
+  assert.equal(polls, 3, "the record event did not wake it");
   t.ctx.sleep = origSleep;
   const to = awaitEvent(t.ctx, { maxMinutes: 1, pollMs: 10_000 });
   assert.deepEqual([to.ok, to.state, to.minutes], [false, "timeout", 1]);
   const run = t.ctx.loadRun();
   run.sessions[0].outcome = "done";
-  t.ctx.saveRun(run);
+  save(t.ctx, run);
   const early = awaitEvent(t.ctx, { maxMinutes: 60, pollMs: 10_000 });
   assert.deepEqual([early.ok, early.events, early.reason], [true, [], "phase plan is done"]);
   t.p.cleanup();

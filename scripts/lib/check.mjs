@@ -2,12 +2,16 @@
 import { signedOff, statusHint, waitingIsDone } from "./markers.mjs";
 import { legalLabels } from "./rider-md.mjs";
 import { sh } from "./shell.mjs";
-import { baseOf, chainCost, chainResumes, currentSession, readJson, totalCost } from "./state.mjs";
+import { chainCost, chainResumes, currentSession, totalCost } from "./state.mjs";
+import { readJson } from "./store.mjs";
 
 const SETTLE_MS = 1000;
 const DONE_GRACE_MS = 10 * 60_000;
 const EVIDENCE_CAP = 2048;
 const STOPPED = new Set(["done", "gone", "rate-limited"]);
+/** The run a locked write committed, carried on its result for the readouts that run after the lock is released.
+ *  A symbol key, so `--json` never prints it. */
+export const RUN = Symbol("run");
 
 /** One watcher per live session: respawn a dead one and count the spawn on the session record.
  *  Idempotent — `ensureWatcher` returns false while the pid file names a living process. */
@@ -18,8 +22,27 @@ export function respawnWatcher(ctx, run, sess) {
   return true;
 }
 
-/** One classification pass over the active run (§4.4). Idempotent; never blocks longer than ~20 s. */
-export function check(ctx) {
+/** One classification pass over the active run (§4.4). Idempotent; never blocks longer than ~20 s. The whole pass
+ *  is one locked write, so a check queued behind another reads the outcome that one stored (§7.3). The watcher passes
+ *  `readouts: false`: it acts on the classification and prints neither evidence nor show. */
+export function check(ctx, { readouts: withReadouts = true } = {}) {
+  const r = ctx.update(() => classify(ctx));
+  return withReadouts ? readouts(ctx, r) : r;
+}
+
+/** What informs the judge but decides nothing runs after the lock is released, against the state just committed (§7.1):
+ *  a stopped or waiting session's evidence, and a human phase's show. Each command may take seconds; no writer waits on them. */
+export function readouts(ctx, r) {
+  const run = r?.[RUN];
+  if (!run) return r;
+  if (r.state === "human") {
+    const show = ctx.rider.phases[r.phase]?.show;
+    r.show = show ? sh(show, ctx.shellOpts(run)).output : null;
+  } else if (r.session && r.state !== "running") r.evidence = runEvidence(ctx, run);
+  return r;
+}
+
+function classify(ctx) {
   const run = ctx.loadRun();
   if (!run) return { state: "none", lastRun: ctx.lastEndedRun() };
   const def = ctx.rider.phases[run.phase];
@@ -135,7 +158,7 @@ export function check(ctx) {
  *  beside it because a name does not survive the branch being deleted after the merge, and a sha does. */
 function noteWorkBranch(ctx, run) {
   const now = ctx.branch();
-  if (!now || now === baseOf(run)) return;
+  if (!now || now === run.baseBranch) return;
   run.workBranch = now;
   const tip = ctx.tip("HEAD");
   if (tip) run.workTip = tip;
@@ -177,8 +200,8 @@ function checkHuman(ctx, run, def) {
     ctx.endRun(run, { endedBy: "done", reason });
     return { state: "none", ended: { runId: run.runId, phase: run.phase, reason }, lastRun: run };
   }
-  const show = def.show ? sh(def.show, ctx.shellOpts(run)).output : null;
-  return { state: "human", rider: run.rider, runId: run.runId, phase: run.phase, check: def.check, checkExit: r.status, checkOutput: r.output, show, notes: run.notes, totalCost: totalCost(run) };
+  // The check runs inside the hold, since its exit decides whether the run ends; `show` only informs (`readouts`).
+  return { state: "human", rider: run.rider, runId: run.runId, phase: run.phase, check: def.check, checkExit: r.status, checkOutput: r.output, show: null, notes: run.notes, totalCost: totalCost(run), [RUN]: run };
 }
 
 /** Gate precision, mechanically: the commits that landed after the sessions handed over — every one is
@@ -187,7 +210,7 @@ function checkHuman(ctx, run, def) {
  *  which was read, since the base can also carry commits that are not this run's). */
 function noteAfterHandoff(ctx, run, branchTip) {
   if (!run.handoff?.tip) return;
-  const ref = branchTip ? run.workBranch : baseOf(run);
+  const ref = branchTip ? run.workBranch : run.baseBranch;
   const commits = ref ? ctx.commitsBetween(run.handoff.tip, ref) : null;
   if (commits) run.handoff.after = { ref, commits };
 }
@@ -213,7 +236,8 @@ function result(ctx, run, sess, outcome, finalText, note = null) {
     rateLimit: sess.rateLimit ?? null, harness: sess.harness ?? null,
     humanTurns: sess.humanTurns ?? 0, humanTurnDetails: sess.humanTurnDetails ?? [], cost: sess.cost ?? null, turns: sess.turns ?? null, elapsedMs: sess.elapsedMs ?? null,
     question: sess.question ?? null, finalText,
-    evidence: state === "running" ? [] : runEvidence(ctx, run),
+    evidence: [], // `readouts` fills it once the lock is released
     labels: legalLabels(ctx.rider, run.phase), log: sess.log ?? null,
+    [RUN]: run,
   };
 }

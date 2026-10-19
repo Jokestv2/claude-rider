@@ -7,7 +7,8 @@ import { check } from "./lib/check.mjs";
 import { createContext } from "./lib/context.mjs";
 import { render } from "./lib/render.mjs";
 import { discoverRiders, loadRider } from "./lib/rider-md.mjs";
-import { ensureDirs, loadLocal, statePaths } from "./lib/state.mjs";
+import { loadLocal } from "./lib/state.mjs";
+import { guardV3, riderPaths } from "./lib/store.mjs";
 import * as verbs from "./lib/verbs.mjs";
 import { awaitEvent, watchLoop } from "./lib/watch.mjs";
 
@@ -21,10 +22,11 @@ const USAGE = `rider — drive riders/<name>/RIDER.md one phase at a time (run f
   rider await [--max-minutes N]       block until the watcher's next event (exit 0) or N min (exit 3)
   rider status                        the run at a glance
   rider note "…"                      append to the run record (the last ended run when none is active)
-  rider reset                         forget the active run (its record stays under .rider/<name>/runs/)
+  rider reset                         forget the active run (its record stays under .rider/<name>/<instance>/runs/)
   rider watch                         the detached watcher itself (spawned by start/next/resume/check)
 
   --rider <directory name>   when the project has several riders   --json   machine-readable output
+  --instance <id>  the rider's instance (default: default)
   --dry-run        start/next/resume/overrule print the harness command and run nothing
   --max-minutes N  await's deadline in minutes (default 60)  --binding <path>  another harness module (or RIDER_BINDING)
 exit: 0 ok · 2 refused or usage · 3 await timed out`;
@@ -43,7 +45,7 @@ function joinBecause(argv) {
 export function parseCli(argv) {
   const { values, positionals } = parseArgs({
     args: joinBecause(argv), allowPositionals: true,
-    options: { rider: { type: "string" }, because: { type: "string" }, json: { type: "boolean" }, "dry-run": { type: "boolean" }, "max-minutes": { type: "string" }, binding: { type: "string" }, help: { type: "boolean", short: "h" } },
+    options: { rider: { type: "string" }, instance: { type: "string" }, because: { type: "string" }, json: { type: "boolean" }, "dry-run": { type: "boolean" }, "max-minutes": { type: "string" }, binding: { type: "string" }, help: { type: "boolean", short: "h" } },
   });
   const [verb = "status", ...args] = positionals;
   return { verb, args, flags: { ...values } }; // parseArgs' values has a null prototype; deepEqual cares
@@ -67,16 +69,19 @@ export async function main(argv = process.argv.slice(2), { cwd = process.cwd(), 
   if (!Number.isFinite(maxMinutes) || maxMinutes <= 0) return fail(`--max-minutes must be a positive number\n${USAGE}`);
   try {
     const rider = loadRider(found.file);
-    const paths = statePaths(cwd, rider.name);
-    ensureDirs(paths);
-    const local = loadLocal(paths);
+    const rp = riderPaths(cwd, rider.name);
+    guardV3(rp);
+    const id = cli.flags.instance ?? "default";
+    if (id !== "default") return fail(`no instance "${id}" — omit --instance to use the default instance`);
+    const instance = { id, scope: ".", declared: false };
+    const local = loadLocal(rp);
     const bindingPath = cli.flags.binding ?? process.env.RIDER_BINDING ?? null;
     const bindingUrl = bindingPath ? pathToFileURL(bindingPath).href : new URL("./bindings/claude-code.mjs", import.meta.url).href;
     const { createBinding } = await import(bindingUrl);
     const binding = createBinding({ claudePath: local.claudePath, advisor: local.advisor, launchArgs: local.launchArgs, permissionMode: local.permissionMode });
     // RIDER_NO_WATCHER=1: tests drive verbs from one process and must not get a real detached watcher
     // racing them over the same state files; the smoke tier keeps the real one on purpose.
-    const ctx = createContext({ rider, root: cwd, paths, local, binding, ...(process.env.RIDER_NO_WATCHER ? { spawnWatcher: () => false } : {}) });
+    const ctx = createContext({ rider, instance, root: cwd, local, binding, riderCount: riders.length, ...(process.env.RIDER_NO_WATCHER ? { spawnWatcher: () => false } : {}) });
     const out = (r) => stdout(cli.flags.json ? JSON.stringify(r, null, 2) : render(cli.verb, r));
     const dryRun = !!cli.flags["dry-run"];
     let r;
@@ -90,7 +95,7 @@ export async function main(argv = process.argv.slice(2), { cwd = process.cwd(), 
       case "note": r = verbs.note(ctx, cli.args.join(" ")); break;
       case "reset": r = verbs.reset(ctx); break;
       case "await": r = awaitEvent(ctx, { maxMinutes }); out(r); return r.ok ? 0 : 3;
-      case "watch": return runWatch(ctx, paths, local, stdout);
+      case "watch": return runWatch(ctx, local, stdout);
       default: return fail(`unknown verb "${cli.verb}"\n${USAGE}`);
     }
     out(r);
@@ -100,14 +105,18 @@ export async function main(argv = process.argv.slice(2), { cwd = process.cwd(), 
   }
 }
 
-function runWatch(ctx, paths, local, stdout) {
-  writeFileSync(paths.watchPid, String(process.pid));
+/** The watcher process. Its pid file is written and removed under the instance lock, like every other write; the
+ *  removal stays conditional, since by then the file may name a newer watcher. */
+function runWatch(ctx, local, stdout) {
+  const { watchPid } = ctx.paths;
+  const mine = String(process.pid);
+  ctx.update(() => writeFileSync(watchPid, mine));
   const log = (m) => stdout(`${new Date().toISOString()} ${m}`);
   try {
     watchLoop(ctx, { maxWaitHours: local.maxWaitHours, pollMs: local.pollSeconds * 1000, log });
     return 0;
   } finally {
-    if (existsSync(paths.watchPid) && readFileSync(paths.watchPid, "utf8").trim() === String(process.pid)) rmSync(paths.watchPid, { force: true });
+    ctx.update(() => { if (existsSync(watchPid) && readFileSync(watchPid, "utf8").trim() === mine) rmSync(watchPid, { force: true }); });
   }
 }
 

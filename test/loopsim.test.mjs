@@ -7,7 +7,7 @@ import { check } from "../scripts/lib/check.mjs";
 import { next, start, status } from "../scripts/lib/verbs.mjs";
 import { watchLoop } from "../scripts/lib/watch.mjs";
 import { FakeBinding } from "./fake-binding.mjs";
-import { FakeClock, makeCtx, tmpProject } from "./helpers.mjs";
+import { FakeClock, makeCtx, tmpProject, wake } from "./helpers.mjs";
 
 const G = (s, { turns = 30, cost = 5 } = {}) => ({ statuses: ["running", "done"], read: { lastText: `STATUS: ${s}\n<promise>MILESTONE</promise>`, cost, turns } });
 const BLOCKED = { statuses: ["done"], read: { lastText: "STATUS: BLOCKED - design change needed: X\n<promise>MILESTONE</promise>", cost: 2 } };
@@ -40,7 +40,7 @@ test("a green milestone: plan → build → close → merge, three transitions, 
   assert.deepEqual(run.transitions.map((x) => `${x.from}:${x.label}>${x.to}`), ["plan:planned>build", "build:code green>close", "close:gate green>merge"]);
   assert.deepEqual(run.visits, { plan: 1, build: 1, close: 1, merge: 1 });
   assert.equal(run.sessions.length, 3);
-  assert.equal(t.ctx.readEvents().length, 3);
+  assert.deepEqual(wake(t.ctx).map((e) => [e.kind, e.phase, e.key]), [["done", "plan", `${run.runId}.1`], ["done", "build", `${run.runId}.2`], ["done", "close", `${run.runId}.3`]]);
   writeFileSync(join(t.p.root, "merged.flag"), "");
   assert.equal(check(t.ctx).state, "none");
   assert.deepEqual([t.ctx.lastEndedRun().endedBy, status(t.ctx).lastRun.totalCost], ["done", 15]);
@@ -55,7 +55,7 @@ test("429 twice mid-plan: both waited out inside the watch, resumed twice, then 
   const r = w(t.ctx);
   assert.equal(r.state, "done");
   assert.equal(r.resumes, 2);
-  assert.equal(t.ctx.readEvents().length, 1);
+  assert.deepEqual(wake(t.ctx).map((e) => e.kind), ["done"]);
   assert.deepEqual(t.ctx.loadRun().sessions.map((s) => [s.phase, s.outcome, s.resumeReason, s.cost]), [["plan", "rate-limited", null, 6], ["plan", "rate-limited", "rate-limit", 7], ["plan", "done", "rate-limit", 2]]);
   // both waits happened inside the watch: the clock sits past the second reset + 60 s, and the last stretch took one
   // running poll to sign off — the grace window would have cost twenty
@@ -110,8 +110,9 @@ test("a rate limit that keeps returning is bounded: three resumes, then one rate
   start(t.ctx);
   assert.equal(w(t.ctx).state, "rate-limited");
   assert.equal(t.binding.calls.filter((c) => c.call === "resume").length, 3);
-  assert.equal(t.ctx.readEvents().length, 1);
-  assert.match(t.ctx.readEvents()[0], / rate-limited .* resumed after a rate limit 3 times/);
+  const ev = wake(t.ctx);
+  assert.deepEqual(ev.map((e) => e.kind), ["rate-limited"]);
+  assert.match(ev[0].text, /resumed after a rate limit 3 times/);
   assert.equal(status(t.ctx).state, "finished"); // the session stopped; the run stays active for the operator's next move
   t.p.cleanup();
 });

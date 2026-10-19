@@ -1,9 +1,13 @@
 // scripts/lib/render.mjs
 import { fmtCost, fmtDuration, formatFinal, formatQuestion } from "./markers.mjs";
-import { baseOf } from "./state.mjs";
 
 const RULE = (title) => `── ${title} ${"─".repeat(Math.max(4, 60 - title.length))}`;
 const labelText = (l) => (l.label === "resume" || l.label === "operator" ? l.label : `${l.label} → ${l.to}`);
+
+/** One event, one line: `<at> <kind> <rider>/<instance>/<runId> <phase> <key> <text>`, with absent fields left out. */
+export function eventLine(e) {
+  return [e.at, e.kind, `${e.rider}/${e.instance}/${e.runId ?? "?"}`, e.phase, e.key, e.text].filter((f) => f != null && f !== "").join(" ").replace(/\r?\n/g, " ");
+}
 
 export function render(verb, r) {
   if (r?.ok === false && r.error) return `refused: ${r.error}`;
@@ -12,9 +16,9 @@ export function render(verb, r) {
     case "none": return renderNone(r);
     case "human": return renderHuman(r);
     case "dry-run": return r.argv ? `[dry-run] ${r.phase} (${r.model}): ${r.argv.map((a) => (/\s/.test(a) ? JSON.stringify(a.length > 60 ? `${a.slice(0, 57)}…` : a) : a)).join(" ")}` : `[dry-run] ${r.phase ?? r.to}`;
-    case "operator": return [`run ${r.runId} stopped at operator: ${r.reason}`, `total cost: ${fmtCost(r.totalCost ?? 0)}`, "the operator directs what happens next:", ...operatorMoves(r.overrule)].join("\n");
+    case "operator": return [`run ${r.runId} stopped at operator: ${r.reason}`, `total cost: ${fmtCost(r.totalCost ?? 0)}`, "the operator directs what happens next:", ...operatorMoves(r.overrulable)].join("\n");
     case "noted": return `noted (${r.notes} notes on ${r.ended ? "ended " : ""}run ${r.runId})`;
-    case "event": return r.events.length ? r.events.join("\n") : `no new event: ${r.reason}`;
+    case "event": return r.events.length ? r.events.map(eventLine).join("\n") : `no new event: ${r.reason}`;
     case "timeout": return `no event in ${r.minutes} min; the phase is still running — re-arm rider await`;
     default: break;
   }
@@ -58,13 +62,13 @@ function renderStatus(r) {
   if (r.state === "none") {
     const L = [`rider ${r.rider} · no active run`];
     if (r.lastRun) L.push(`last run ${r.lastRun.runId} ended at ${r.lastRun.endedBy} (phase ${r.lastRun.phase}): ${r.lastRun.reason ?? ""}   cost ${fmtCost(r.lastRun.totalCost)}`);
-    if (r.lastRun?.endedBy === "operator") L.push("next, on the operator's word:", ...operatorMoves(r.lastRun.overrule));
+    if (r.lastRun?.endedBy === "operator") L.push("next, on the operator's word:", ...operatorMoves(r.lastRun.overrulable));
     else L.push("next: rider start [phase]");
     return L.join("\n");
   }
-  const base = baseOf(r) ?? "?";
+  const base = r.baseBranch ?? "?";
   const branchText = r.workBranch && r.workBranch !== base ? `base ${base} → work ${r.workBranch}` : `branch ${base}`;
-  const L = [`rider ${r.rider}/${r.runId} · phase ${r.phase} (visit ${r.visits[r.phase] ?? 1}) · ${branchText} · started ${r.startedAt}`, `state: ${r.state}   watcher: ${r.watcher ? `alive (pid ${r.watcher})` : "none"}   last event: ${r.lastEvent ?? "none"}`];
+  const L = [`rider ${r.rider}/${r.runId} · phase ${r.phase} (visit ${r.visits[r.phase] ?? 1}) · ${branchText} · started ${r.startedAt}`, `state: ${r.state}   watcher: ${r.watcher ? `alive (pid ${r.watcher})` : "none"}   last event: ${r.lastEvent ? eventLine(r.lastEvent) : "none"}`];
   for (const s of r.sessions) L.push(`  ${s.phase.padEnd(8)} ${s.model.padEnd(7)} ${(s.shortId ?? "?").padEnd(9)} ${s.outcome.padEnd(13)} ${fmtCost(s.cost)}${s.turns != null ? `  ${s.turns} turns` : ""}${s.resumedFrom ? "  (resumed)" : ""}`);
   L.push(`total cost: ${fmtCost(r.totalCost)}`);
   if (r.attach) L.push(`attach: ${r.attach}`);

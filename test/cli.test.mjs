@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isEntryPoint, parseCli } from "../scripts/rider.mjs";
@@ -103,4 +103,29 @@ test("no rider, several riders, --rider selection, and the failures before dispa
   const nobinding = at(p.root, "status", "--rider", "lemmaria", "--binding", "./does-not-exist.mjs", "--json");
   assert.deepEqual([nobinding.status, JSON.parse(nobinding.stdout).ok], [2, false]);
   p.cleanup();
+});
+
+test("every verb refuses state from an older executor, and leaves a guard against one", () => {
+  const p = tmpProject();
+  const at = (...args) => spawnSync(process.execPath, [RIDER, ...args], { cwd: p.root, encoding: "utf8", env: { ...process.env, RIDER_NO_WATCHER: "1" } });
+  const v3Run = join(p.root, ".rider", "lemmaria", "run.json");
+  try {
+    // A fresh project: the first verb leaves a directory where an older executor looks for its run, so that one fails.
+    assert.equal(at("status").status, 0);
+    assert.equal(statSync(v3Run).isDirectory(), true);
+    assert.equal(at("status").status, 0, "and the guard is not mistaken for old state");
+    assert.equal(existsSync(join(p.root, ".rider", "lemmaria", "default", "state.json")), false, "status writes no state");
+  } finally { p.cleanup(); }
+  const q = tmpProject();
+  const atQ = (...args) => spawnSync(process.execPath, [RIDER, ...args], { cwd: q.root, encoding: "utf8", env: { ...process.env, RIDER_NO_WATCHER: "1" } });
+  try {
+    mkdirSync(join(q.root, ".rider", "lemmaria"), { recursive: true });
+    writeFileSync(join(q.root, ".rider", "lemmaria", "run.json"), "{}");
+    for (const verb of ["status", "start", "check"]) {
+      const r = atQ(verb);
+      assert.equal(r.status, 2, verb);
+      assert.match(r.stderr, /state from an older claude-rider/, verb);
+    }
+    assert.equal(existsSync(join(q.root, ".rider", "lemmaria", "default")), false, "nothing was written beside it");
+  } finally { q.cleanup(); }
 });

@@ -39,8 +39,11 @@ test("operator ends the run with the reason; status then reports the last run; s
   assert.equal(ctx.loadRun(), null);
   const s = status(ctx);
   assert.equal(s.state, "none");
+  assert.deepEqual([s.instance, s.scope], ["default", "."]);
   assert.deepEqual([s.lastRun.endedBy, s.lastRun.reason, s.lastRun.phase], ["operator", "BLOCKED: design change X, see open-questions.md", "plan"]);
   assert.equal(start(ctx, { phase: "plan" }).state, "running");
+  // An active run's status still names the run before it.
+  assert.deepEqual([status(ctx).lastRun.runId, status(ctx).instance], [r.runId, "default"]);
   p.cleanup();
 });
 

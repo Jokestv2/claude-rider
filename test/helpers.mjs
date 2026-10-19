@@ -38,9 +38,10 @@ review the branch, and merge — the merge is their report.
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadRider } from "../scripts/lib/rider-md.mjs";
-import { ensureDirs, loadLocal, statePaths } from "../scripts/lib/state.mjs";
+import { listInstances, loadRider } from "../scripts/lib/rider-md.mjs";
+import { loadLocal } from "../scripts/lib/state.mjs";
 import { createContext } from "../scripts/lib/context.mjs";
+import { riderPaths, WAKE_KINDS } from "../scripts/lib/store.mjs";
 
 export const TEST_RIDER_MD = `---
 name: lemmaria
@@ -95,9 +96,20 @@ export function settled(check, ctx, max = 5) {
   return r;
 }
 
-export function makeCtx({ root, name = "lemmaria", binding, clock = new FakeClock(), local = {}, spawnWatcher = () => false, watcherAlive = () => null, killWatcher = () => {} }) {
+/** A context on one instance of the test rider: `instance` names one of its declared instances, or null for `default`. */
+export function makeCtx({ root, name = "lemmaria", instance = null, binding, clock = new FakeClock(), local = {}, spawnWatcher = () => false, watcherAlive = () => null, killWatcher = () => {}, lock = {}, riderCount = 1 }) {
   const rider = loadRider(join(root, "riders", name, "RIDER.md"));
-  const paths = statePaths(root, rider.name);
-  ensureDirs(paths);
-  return createContext({ rider, root, paths, local: { ...loadLocal(paths), ...local }, binding, now: clock.now, sleep: clock.sleep, spawnWatcher, watcherAlive, killWatcher });
+  const { declared, instances } = listInstances(root, rider);
+  const id = instance ?? "default";
+  const found = instances.find((i) => i.id === id);
+  if (!found) throw new Error(`makeCtx: ${rider.name} has no instance ${id}; have: ${instances.map((i) => i.id).join(", ") || "none"}`);
+  return createContext({ rider, instance: { ...found, declared }, root, local: { ...loadLocal(riderPaths(root, rider.name)), ...local }, binding, now: clock.now, sleep: clock.sleep, spawnWatcher, watcherAlive, killWatcher, lock, riderCount });
 }
+
+/** A run edited by hand is written the way every writer writes: under the instance lock. */
+export const save = (ctx, run) => ctx.update(() => ctx.saveRun(run));
+/** The events `await` wakes on; record events share the file, so a test that counts what the watcher said filters first. */
+export const wake = (ctx) => ctx.readEvents().filter((e) => WAKE_KINDS.includes(e.kind));
+/** A rate-limit message whose reset is `min` minutes after the clock's CURRENT time. Successive limits in one scenario
+ *  must use increasing offsets: a wall-clock time already passed parses as tomorrow (past the cap). */
+export const limitSoon = (clock, min = 30) => { const t = new Date(clock.t + min * 60_000); return `You've hit your session limit - resets ${t.getUTCHours()}:${String(t.getUTCMinutes()).padStart(2, "0")} (UTC)`; };

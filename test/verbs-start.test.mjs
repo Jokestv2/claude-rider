@@ -2,12 +2,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readdirSync } from "node:fs";
-import { join } from "node:path";
 import { start } from "../scripts/lib/verbs.mjs";
 import { FakeBinding } from "./fake-binding.mjs";
 import { TEST_RIDER_MD, makeCtx, tmpProject } from "./helpers.mjs";
 
-test("a fresh start runs intake, creates run.json, launches the start phase, spawns the watcher", () => {
+test("a fresh start runs intake, creates the run in state.json, launches the start phase, spawns the watcher", () => {
   const p = tmpProject();
   let spawned = 0;
   const binding = new FakeBinding({ script: [{ statuses: ["running"] }] });
@@ -21,6 +20,7 @@ test("a fresh start runs intake, creates run.json, launches the start phase, spa
   assert.equal(r.session.shortId, "s1");
   assert.match(r.attach, /claude attach s1/);
   const run = ctx.loadRun();
+  assert.equal(existsSync(ctx.paths.state), true);
   assert.equal(run.rider, "lemmaria");
   assert.match(run.runId, /^[0-9a-f]{4}$/);
   assert.deepEqual(run.visits, { plan: 1 });
@@ -49,11 +49,13 @@ test("start names a phase as an operator override; a human or unknown phase is r
 test("intake refuses before any launch and names the command", () => {
   const p = tmpProject({ riderMd: TEST_RIDER_MD.replace("  - test -d riders", "  - test -d riders\n  - exit 3") });
   const binding = new FakeBinding({ script: [{}] });
-  const r = start(makeCtx({ root: p.root, binding }));
+  const ctx = makeCtx({ root: p.root, binding });
+  const r = start(ctx);
   assert.equal(r.ok, false);
   assert.match(r.error, /intake check failed \(exit 3\): exit 3/);
   assert.equal(binding.calls.length, 0);
-  assert.equal(existsSync(join(p.root, ".rider", "lemmaria", "run.json")), false);
+  assert.equal(existsSync(ctx.paths.state), false, "no run was written");
+  assert.deepEqual(ctx.readEvents(), []);
   p.cleanup();
 });
 
@@ -86,7 +88,7 @@ test("a launch failure ends the run at operator with the reason", () => {
   assert.equal(r.ok, false);
   assert.match(r.error, /launch failed: fake binding: script exhausted/);
   assert.equal(ctx.loadRun(), null);
-  assert.equal(readdirSync(join(p.root, ".rider", "lemmaria", "runs")).length, 1);
+  assert.equal(readdirSync(ctx.paths.runs).length, 1);
   assert.equal(ctx.lastEndedRun().endedBy, "operator");
   p.cleanup();
 });

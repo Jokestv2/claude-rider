@@ -8,7 +8,7 @@ import { check } from "../scripts/lib/check.mjs";
 import { renderCheck } from "../scripts/lib/render.mjs";
 import { next, resume, start } from "../scripts/lib/verbs.mjs";
 import { FakeBinding } from "./fake-binding.mjs";
-import { FakeClock, makeCtx, settled, tmpProject } from "./helpers.mjs";
+import { FakeClock, makeCtx, save, settled, tmpProject } from "./helpers.mjs";
 
 const GREEN = "Plan is committed.\nSTATUS: planned\n<promise>MILESTONE PLANNED</promise>";
 function setup(script, extra = {}) {
@@ -126,7 +126,7 @@ test("a busy session that signed off with no new turn across two checks is done"
 
 test("a resumed stretch does not sign off on the previous stretch's text", () => {
   const { ctx, binding, p } = setup([{ statuses: ["running"], read: { lastText: GREEN, turns: 12 } }]);
-  const run = ctx.loadRun(); run.sessions[0].baselineTurns = 12; ctx.saveRun(run); // what `resume` records
+  const run = ctx.loadRun(); run.sessions[0].baselineTurns = 12; save(ctx, run); // what `resume` records
   assert.equal(check(ctx).state, "running");
   assert.equal(check(ctx).state, "running");
   assert.equal(binding.calls.filter((c) => c.call === "stop").length, 0);
@@ -231,8 +231,8 @@ test("a live session the operator typed into is still running: intervened is a s
 test("at a human phase: check fails → human with show; check passes → the run ends", () => {
   const p = tmpProject();
   const ctx = makeCtx({ root: p.root, binding: new FakeBinding() });
-  const run = { rider: "lemmaria", runId: "ab12", startedAt: "2026-09-03T12:00:00.000Z", branch: null, phase: "merge", visits: { merge: 1 }, transitions: [], sessions: [{ phase: "close", cost: 2, outcome: "done" }], notes: [] };
-  ctx.saveRun(run);
+  const run = { rider: "lemmaria", runId: "ab12", startedAt: "2026-09-03T12:00:00.000Z", baseBranch: null, phase: "merge", visits: { merge: 1 }, transitions: [], sessions: [{ phase: "close", cost: 2, outcome: "done" }], notes: [] };
+  save(ctx, run);
   const r = check(ctx);
   assert.equal(r.state, "human");
   assert.equal(r.check, "test -f merged.flag");
@@ -338,7 +338,7 @@ test("a confirming look starts over when the transcript moved in between", () =>
   try {
     const run = ctx.loadRun();
     run.sessions[0].bareDone = { turns: 9, sightings: 1 }; // what a first, unconfirmed sighting leaves behind
-    ctx.saveRun(run);
+    save(ctx, run);
     turns = 12;
     assert.equal(check(ctx).state, "running", "the second look in a row, but not over the same transcript");
     assert.deepEqual(ctx.loadRun().sessions[0].bareDone, { turns: 12, sightings: 1 }, "a moved transcript is a first sighting again");

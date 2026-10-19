@@ -17,12 +17,13 @@ export function watcherAlive(paths, alive = isAlive) {
   return pid && alive(pid) ? pid : null;
 }
 
-/** One watcher per run, detached from the invoking process tree (§4.6). Returns true when it spawned. */
-export function ensureWatcher(paths, { riderName, root, script = RIDER_SCRIPT, alive = isAlive, spawn = nodeSpawn }) {
+/** One watcher per instance with a live phase, detached from the invoking process tree (§4.6, §13). The caller holds
+ *  the instance's lock: the liveness test and the pid write must not interleave with another writer's. Returns true when it spawned. */
+export function ensureWatcher(paths, { riderName, instance, root, script = RIDER_SCRIPT, alive = isAlive, spawn = nodeSpawn }) {
   if (watcherAlive(paths, alive)) return false;
   mkdirSync(paths.logs, { recursive: true });
   const out = openSync(paths.watchLog, "a");
-  const child = spawn(process.execPath, [script, "watch", "--rider", riderName], { cwd: root, detached: true, stdio: ["ignore", out, out], windowsHide: true });
+  const child = spawn(process.execPath, [script, "watch", "--rider", riderName, "--instance", instance], { cwd: root, detached: true, stdio: ["ignore", out, out], windowsHide: true });
   child.unref();
   writeFileSync(paths.watchPid, String(child.pid));
   return true;
