@@ -15,6 +15,7 @@ export function createContext({ rider, instance, root, local, binding, now = () 
   const shell = resolveShell(local);
   let depth = 0;
   let release = null;
+  let queue = [];
   /** A write outside `update` is an executor bug no user can reach by any verb, so it fails loudly instead of racing. */
   const locked = (what) => { if (depth === 0) throw new Error(`internal: ${what} outside the instance lock`); };
   const read = () => readState(paths) ?? emptyState({ rider: rider.name, instance: instance.id, scope: instance.scope });
@@ -31,11 +32,26 @@ export function createContext({ rider, instance, root, local, binding, now = () 
   const ctx = {
     rider, instance, root, paths, local, binding, now, sleep, riderCount,
     /** One hold per verb. Reentrant through the depth count: a verb that calls another (next → resume, start →
-     *  enterPhase → ensureWatcher) must not wait on the lock it already holds. */
+     *  enterPhase → ensureWatcher) must not wait on the lock it already holds. The hold's events are appended after
+     *  `fn` returns and before the lock is let go, so they follow every write they record (§7.1); a throw drops them. */
     update(fn) {
       if (depth === 0) release = acquireLock(paths, { ...lock, now, sleep });
       depth++;
-      try { return fn(); } finally { if (--depth === 0) { const r = release; release = null; r(); } }
+      let committed = false;
+      try {
+        const r = fn();
+        committed = true;
+        return r;
+      } finally {
+        if (--depth === 0) {
+          const events = queue;
+          const unlock = release;
+          queue = [];
+          release = null;
+          // seq is assigned as each lands, into the object `event` returned, so its caller sees it once this returns.
+          try { if (committed) for (const e of events) Object.assign(e, appendEvent(paths, e, new Date(e.at))); } finally { unlock(); }
+        }
+      }
     },
     holding: () => depth > 0,
     /** Readers take no lock: state.json only ever changes by rename (§7.2). */
@@ -81,7 +97,14 @@ export function createContext({ rider, instance, root, local, binding, now = () 
       rmSync(own, { force: true });
       return run;
     },
-    event(kind, { runId = null, phase = null, key = null, text = "" } = {}) { locked(`event ${kind}`); return appendEvent(paths, { runId, kind, phase, key, text }, now()); },
+    /** Queued, in hold order, and written when the hold commits: a record event says a write happened (§6.2), so a
+     *  hold that throws leaves none. Returns the event, whose `seq` is filled in when it lands. */
+    event(kind, { runId = null, phase = null, key = null, text = "" } = {}) {
+      locked(`event ${kind}`);
+      const e = { seq: null, at: now().toISOString(), rider: paths.rider, instance: paths.instance, runId, kind, phase, key, text };
+      queue.push(e);
+      return e;
+    },
     readEvents: () => readEvents(paths),
     writeLog: (name, data) => writeLog(paths, name, data),
     shellOpts: (run = null) => ({ cwd: root, shell, env: { ...process.env, ...riderEnv(rider, run) } }),

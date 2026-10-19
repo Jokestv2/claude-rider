@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { awaitEvent, watchLoop } from "../scripts/lib/watch.mjs";
-import { start } from "../scripts/lib/verbs.mjs";
+import { next, start } from "../scripts/lib/verbs.mjs";
 import { FakeBinding } from "./fake-binding.mjs";
 import { FakeClock, limitSoon, makeCtx, save, tmpProject, wake } from "./helpers.mjs";
 
@@ -126,6 +126,29 @@ test("five consecutive check failures: the watch emits an event and stops", () =
   // The give-up is its own kind (v3 wrote the session's last outcome): the session may well be running still.
   assert.deepEqual([ev[0].kind, ev[0].runId, ev[0].phase, ev[0].key, ev[0].text], ["watcher-stopped", runId, "plan", `${runId}.1`, "watcher giving up: registry unreadable"]);
   assert.deepEqual(r.event, ev[0]);
+  t.p.cleanup();
+});
+
+test("no terminal event for a stretch the run moved past between the watcher's check and its emit", () => {
+  const t = setup([{ statuses: ["running", "done"], read: { lastText: "STATUS: planned", turns: 5 } }, { statuses: ["running"] }]);
+  const judge = makeCtx({ root: t.p.root, binding: t.binding, clock: t.clock });
+  start(t.ctx);
+  // The judge reads the stopped session's stored block and decides in the gap between the watcher's two holds:
+  // the seam is the watcher's next hold, taken once the stop is on file.
+  const update = t.ctx.update;
+  let decided = false;
+  t.ctx.update = (fn) => {
+    if (!decided && judge.loadRun().sessions[0].outcome === "done") {
+      decided = true;
+      assert.equal(next(judge, "planned", { because: "plan committed" }).phase, "build");
+    }
+    return update(fn);
+  };
+  assert.equal(watchLoop(t.ctx, opts(t)), null);
+  assert.equal(decided, true);
+  assert.deepEqual(wake(t.ctx), [], "an await armed on build must not wake on plan's stop");
+  assert.ok(t.logs.includes("the run moved on; exiting"));
+  assert.equal(t.ctx.loadRun().phase, "build");
   t.p.cleanup();
 });
 

@@ -7,7 +7,7 @@ import { check } from "../scripts/lib/check.mjs";
 import { loadRider } from "../scripts/lib/rider-md.mjs";
 import { isLive } from "../scripts/lib/state.mjs";
 import { endedRunPath, readJson, readState } from "../scripts/lib/store.mjs";
-import { next, overrule, start } from "../scripts/lib/verbs.mjs";
+import { next, overrule, reset, start } from "../scripts/lib/verbs.mjs";
 import { awaitEvent, watchLoop } from "../scripts/lib/watch.mjs";
 import { FakeBinding } from "./fake-binding.mjs";
 import { FakeClock, limitSoon, makeCtx, tmpProject } from "./helpers.mjs";
@@ -150,6 +150,52 @@ test("overrule's revival moves the record back; lastRun falls back to the run be
     assert.deepEqual([state.lastRun.runId, state.lastRun.endedBy], [one.runId, "done"]);
     assert.deepEqual(readdirSync(ctx.paths.runs), [basename(endedRunPath(ctx.paths, state.lastRun))], "only run 1's record is left in runs/");
     assert.equal(ctx.lastEndedRun().runId, one.runId);
+  } finally { p.cleanup(); }
+});
+
+test("a hold's events are written when it commits, numbered as they land, and dropped when it throws", () => {
+  const p = tmpProject();
+  try {
+    const ctx = makeCtx({ root: p.root, binding: new FakeBinding() });
+    const queued = ctx.update(() => {
+      const e = ctx.event("noted", { runId: "ab12", phase: "plan", text: "kept" });
+      assert.deepEqual(ctx.readEvents(), [], "not on file while the hold is open");
+      return e;
+    });
+    assert.equal(queued.seq, 1, "the caller's event carries its seq once the hold has committed");
+    assert.deepEqual(ctx.readEvents(), [queued]);
+    assert.throws(() => ctx.update(() => { ctx.event("noted", { runId: "ab12", phase: "plan", text: "lost" }); throw new Error("boom"); }), /boom/);
+    assert.deepEqual(ctx.readEvents().map((e) => e.text), ["kept"]);
+    assert.equal(ctx.holding(), false);
+  } finally { p.cleanup(); }
+});
+
+test("a verb whose hold throws leaves no record event for the write it never made", () => {
+  const p = tmpProject();
+  const ctx = makeCtx({ root: p.root, binding: new FakeBinding({ script: [{ statuses: ["done"], read: { lastText: "STATUS: planned", turns: 5 } }] }) });
+  const kinds = () => ctx.readEvents().map((e) => e.kind);
+  try {
+    // start queues run-started, then the launch's prompt read throws before any state is written.
+    rmSync(join(p.riderDir, "plan.md"));
+    assert.throws(() => start(ctx), /ENOENT/);
+    assert.deepEqual([kinds(), ctx.loadRun()], [[], null]);
+
+    writeFileSync(join(p.riderDir, "plan.md"), "PLAN PROMPT");
+    start(ctx);
+    assert.equal(check(ctx).state, "done");
+    // next queues decided, then entering build throws the same way: no decided, and the run has not moved.
+    rmSync(join(p.riderDir, "build.md"));
+    assert.throws(() => next(ctx, "planned", { because: "plan committed" }), /ENOENT/);
+    assert.deepEqual(kinds(), ["run-started", "phase-entered"]);
+    assert.deepEqual([ctx.loadRun().phase, ctx.loadRun().transitions.length], ["plan", 0]);
+
+    // reset queues reset, then the end's first write fails: a file stands where runs/ goes.
+    writeFileSync(ctx.paths.runs, "");
+    assert.throws(() => reset(ctx), { code: "EEXIST" });
+    assert.deepEqual(kinds(), ["run-started", "phase-entered"], "neither reset nor run-ended");
+    assert.equal(ctx.loadRun().phase, "plan", "state.json is the truth: the run is still active");
+    assert.equal(ctx.holding(), false);
+    assert.equal(existsSync(ctx.paths.lock), false);
   } finally { p.cleanup(); }
 });
 

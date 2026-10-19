@@ -7,8 +7,18 @@ import { resume } from "./verbs.mjs";
 
 /** The key of the stretch a check result is about, read off the run that check committed. */
 const stretchKey = (r) => { const run = r[RUN]; const sess = run && currentSession(run); return sess ? keyOf(run, sess) : null; };
-/** One wake event is one short locked write: the watcher never holds the instance across a sleep (§13). */
-const emit = (ctx, r, kind, text = "") => ctx.update(() => ctx.event(kind, { runId: r.runId, phase: r.phase, key: stretchKey(r), text }));
+/** One wake event is one short locked write: the watcher never holds the instance across a sleep (§13). It re-reads
+ *  the run first: a judge reading the stored block may have decided since this watcher's check, and an event for a
+ *  stretch the run has moved past would wake the await armed on the next one. False, and nothing written, when it moved on. */
+const emit = (ctx, r, kind, text = "") => ctx.update(() => {
+  const key = stretchKey(r);
+  const run = ctx.loadRun();
+  const sess = run && currentSession(run);
+  if (!sess || keyOf(run, sess) !== key) return false;
+  ctx.event(kind, { runId: r.runId, phase: r.phase, key, text });
+  return true;
+});
+const MOVED_ON = "the run moved on; exiting";
 
 /** The give-up event when `check` keeps throwing. Reads the run defensively: a corrupt state.json is the
  *  likeliest reason check threw at all, and `loadRun` would then throw again here. */
@@ -71,7 +81,11 @@ export function watchLoop(ctx, { maxWaitHours = 6, pollMs = 30_000, maxResumes =
       if (!resetAt) giveUp = "no reset time could be parsed from the rate-limit message";
       else if (consecutive >= maxResumes) giveUp = `resumed after a rate limit ${consecutive} times and the limit keeps returning`;
       else if (waitMs > maxWaitHours * 3600_000) giveUp = `reset is ${fmtDuration(waitMs)} away, past the ${maxWaitHours}h cap (maxWaitHours in local.json)`;
-      if (giveUp) { emit(ctx, r, "rate-limited", giveUp); log(`rate limited; giving up: ${giveUp}`); return r; }
+      if (giveUp) {
+        if (!emit(ctx, r, "rate-limited", giveUp)) { log(MOVED_ON); return null; }
+        log(`rate limited; giving up: ${giveUp}`);
+        return r;
+      }
       const until = resetAt.getTime() + 60_000;
       log(`rate limited; waiting ${fmtDuration(until - ctx.now().getTime())} for the reset, then resuming ${r.session.id}`);
       const sessAt = r.session.at;
@@ -81,11 +95,14 @@ export function watchLoop(ctx, { maxWaitHours = 6, pollMs = 30_000, maxResumes =
         if (!fresh || fresh.runId !== r.runId || fresh.phase !== r.phase || currentSession(fresh)?.at !== sessAt) { log("the run moved on while waiting; exiting"); return null; }
       }
       const res = resume(ctx, { reason: "rate-limit" });
-      if (!res.ok) { emit(ctx, r, "rate-limited", `resume failed: ${res.error}`); return r; }
+      if (!res.ok) {
+        if (!emit(ctx, r, "rate-limited", `resume failed: ${res.error}`)) { log(MOVED_ON); return null; }
+        return r;
+      }
       log(`resumed as ${res.session.shortId}`);
       continue;
     }
-    emit(ctx, r, r.state, r.statusHint ?? r.doneReason ?? "");
+    if (!emit(ctx, r, r.state, r.statusHint ?? r.doneReason ?? "")) { log(MOVED_ON); return null; }
     log(`${r.state}: ${r.statusHint ?? r.doneReason ?? ""}`);
     return r;
   }
