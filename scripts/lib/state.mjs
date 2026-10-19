@@ -10,10 +10,13 @@ export function loadLocal(rp) {
 export function newRun({ rider, phase, baseBranch, now }) {
   return { rider, runId: randomBytes(2).toString("hex"), startedAt: now.toISOString(), baseBranch: baseBranch ?? null, phase, visits: {}, transitions: [], sessions: [], notes: [] };
 }
-/** What a RIDER.md-declared command (intake, check, show, evidence) is told about the run. */
-export function riderEnv(rider, run) {
+/** What a RIDER.md-declared command (intake, check, show, evidence) is told about the run and the instance it serves
+ *  (§11). No instance is a rider without `instances`: its one instance, `default`, scoped to the project root. */
+export function riderEnv(rider, run, instance) {
   return {
     RIDER_NAME: rider?.name ?? "",
+    RIDER_INSTANCE: instance?.id ?? "default",
+    RIDER_SCOPE: instance?.scope || ".",
     RIDER_RUN_ID: run?.runId ?? "",
     RIDER_PHASE: run?.phase ?? "",
     RIDER_BASE_BRANCH: run?.baseBranch ?? "",

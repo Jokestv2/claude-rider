@@ -93,11 +93,12 @@ export function enterPhase(ctx, run, phase, { dryRun = false } = {}) {
   }
   if (def.kind === "human") {
     if (dryRun) return { ok: true, state: "dry-run", phase, human: true, check: def.check };
-    // What the sessions handed over: the commits the work branch gains past this tip are the human
-    // phase's own, and `check` records them when the phase's check passes (the gate-precision record).
-    // A run recorded before `workTip` existed (or revived by `overrule`) has a branch and no tip: read it now.
+    // What the sessions handed over: the commits that land past this tip are the human phase's own, and
+    // `check` records them when the phase's check passes (the gate-precision record). A run recorded before
+    // `workTip` existed (or revived by `overrule`) has a branch and no tip: read it now. A run with no work
+    // branch (on the base, or any instance rider's, §11.1) hands over HEAD; that is not a work tip.
     if (!run.workTip && run.workBranch) { const tip = ctx.tip(`refs/heads/${run.workBranch}`); if (tip) run.workTip = tip; }
-    run.handoff = { phase, at, tip: run.workTip ?? null };
+    run.handoff = { phase, at, tip: run.workTip ?? ctx.tip("HEAD") };
     ctx.saveRun(run);
     ctx.event("phase-entered", { runId: run.runId, phase, text: `visit ${run.visits[phase]} · human: ${def.check}` });
     // No `checkExit`: the check has not run yet, and `rider check` is what runs it. `show` runs after the lock (`readouts`).

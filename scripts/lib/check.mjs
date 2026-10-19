@@ -156,11 +156,19 @@ function classify(ctx) {
   return result(ctx, run, sess, kind, h.lastText ?? "");
 }
 
-/** Sticky: the branch the work went to. Not cleared when the operator checks out the base for the
- *  merge — that is exactly when the terminal check needs the feature branch's name. Its tip is kept
- *  beside it because a name does not survive the branch being deleted after the merge, and a sha does. */
+/** Sticky, for a rider without instances: the branch the work went to. Not cleared when the operator checks out
+ *  the base for the merge — that is exactly when the terminal check needs the feature branch's name — and its tip
+ *  is kept beside it, since a sha survives the branch's deletion and a name does not. A rider with instances never
+ *  records one (§11.1): the branch checked out is the shared tree's, and would become every instance's work branch
+ *  on its next poll. A tree off the base is drift instead, dated from its first sighting and cleared on the base. */
 function noteWorkBranch(ctx, run) {
   const now = ctx.branch();
+  if (ctx.instance.declared) {
+    if (now && run.baseBranch && now !== run.baseBranch) {
+      if (run.branchDrift?.branch !== now) run.branchDrift = { branch: now, at: ctx.now().toISOString() };
+    } else delete run.branchDrift;
+    return;
+  }
   if (!now || now === run.baseBranch) return;
   run.workBranch = now;
   const tip = ctx.tip("HEAD");
@@ -209,12 +217,13 @@ function checkHuman(ctx, run, def) {
 
 /** Gate precision, mechanically: the commits that landed after the sessions handed over — every one is
  *  something the last session phase called finished and the human phase did not. Read from the work
- *  branch while it exists, and from the base once it is deleted (the merge put them there; `ref` says
- *  which was read, since the base can also carry commits that are not this run's). */
+ *  branch while it exists, from the base once it is deleted (the merge put them there), and from HEAD
+ *  when the run never knew its base; `ref` says which was read. Only commits under the instance's
+ *  directory count (§11): the base also carries other instances' work, and shared code is not attributed. */
 function noteAfterHandoff(ctx, run, branchTip) {
   if (!run.handoff?.tip) return;
-  const ref = branchTip ? run.workBranch : run.baseBranch;
-  const commits = ref ? ctx.commitsBetween(run.handoff.tip, ref) : null;
+  const ref = branchTip ? run.workBranch : run.baseBranch ?? "HEAD";
+  const commits = ctx.commitsBetween(run.handoff.tip, ref);
   if (commits) run.handoff.after = { ref, commits };
 }
 

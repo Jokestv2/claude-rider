@@ -45,7 +45,9 @@ test("tip and commitsBetween: a sha outlives the branch it was read from", () =>
     const env = { ...process.env, RIDER_WORK_TIP: merged };
     assert.equal(sh('test -n "$RIDER_WORK_TIP" && git merge-base --is-ancestor "$RIDER_WORK_TIP" main', { cwd: p.root, env }).status, 0);
     assert.equal(sh('test -n "$RIDER_WORK_TIP" && git merge-base --is-ancestor "$RIDER_WORK_TIP" main', { cwd: p.root, env: { ...process.env, RIDER_WORK_TIP: "" } }).status, 1, "no tip: a plain no, not git's 128");
-    // Once the branch is gone the commits after the handoff are read off the base, merge commit included.
-    assert.deepEqual(ctx.commitsBetween(handoff, "main").map((l) => l.replace(/^\S+ /, "")), ["merge", "fix: found at the gate"]);
+    // Once the branch is gone the commits after the handoff are read off the base. The read is path-limited to the
+    // instance's scope (`.` here, §11), and git's history simplification drops a merge that changed nothing against
+    // the branch it brought in: the merge is the operator's report, not something the gate missed.
+    assert.deepEqual(ctx.commitsBetween(handoff, "main").map((l) => l.replace(/^\S+ /, "")), ["fix: found at the gate"]);
   } finally { p.cleanup(); }
 });

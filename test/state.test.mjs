@@ -40,15 +40,19 @@ test("a run records base and work branch", () => {
   assert.equal("branch" in run, false, "the legacy mirror is gone (§15)");
   assert.equal(run.workBranch, undefined);
 
-  assert.deepEqual(riderEnv({ name: "lemmaria" }, { runId: "c84c", phase: "build", baseBranch: "main", workBranch: "feature/r4-grounding", workTip: "0f1e2d3c" }), {
-    RIDER_NAME: "lemmaria", RIDER_RUN_ID: "c84c", RIDER_PHASE: "build",
+  assert.deepEqual(riderEnv({ name: "lemmaria" }, { runId: "c84c", phase: "build", baseBranch: "main", workBranch: "feature/r4-grounding", workTip: "0f1e2d3c" }, { id: "default", scope: "." }), {
+    RIDER_NAME: "lemmaria", RIDER_INSTANCE: "default", RIDER_SCOPE: ".", RIDER_RUN_ID: "c84c", RIDER_PHASE: "build",
     RIDER_BASE_BRANCH: "main", RIDER_WORK_BRANCH: "feature/r4-grounding", RIDER_WORK_TIP: "0f1e2d3c",
+  });
+  assert.deepEqual(riderEnv({ name: "lemmaria" }, null, { id: "a", scope: "nodes/a" }), {
+    RIDER_NAME: "lemmaria", RIDER_INSTANCE: "a", RIDER_SCOPE: "nodes/a", RIDER_RUN_ID: "", RIDER_PHASE: "",
+    RIDER_BASE_BRANCH: "", RIDER_WORK_BRANCH: "", RIDER_WORK_TIP: "",
   });
 
   // The base is read from `baseBranch` alone: a record carrying only the legacy `branch` has no base, and an
-  // absent work branch is "".
+  // absent work branch is "". No instance is the rider without instances: `default`, at the root.
   assert.deepEqual(riderEnv({ name: "lemmaria" }, { runId: "c84c", phase: "merge", branch: "main" }), {
-    RIDER_NAME: "lemmaria", RIDER_RUN_ID: "c84c", RIDER_PHASE: "merge",
+    RIDER_NAME: "lemmaria", RIDER_INSTANCE: "default", RIDER_SCOPE: ".", RIDER_RUN_ID: "c84c", RIDER_PHASE: "merge",
     RIDER_BASE_BRANCH: "", RIDER_WORK_BRANCH: "", RIDER_WORK_TIP: "",
   });
 
