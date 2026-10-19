@@ -1,22 +1,12 @@
 // scripts/lib/verbs.mjs
 import { readFileSync } from "node:fs";
-import { legalLabels } from "./rider-md.mjs";
+import { legalLabels, onwardEdges, overrulable } from "./rider-md.mjs";
 import { sh } from "./shell.mjs";
 import { baseOf, currentSession, newRun, totalCost } from "./state.mjs";
 
 export function refuse(error) { return { ok: false, error }; }
 
 const labelList = (ctx, phase) => legalLabels(ctx.rider, phase).map((l) => l.label).join(" · ");
-/** The edges `overrule` may take: the ones that leave for another phase. `operator` again is no ruling,
- *  and `resume` re-enters a session with a nudge that says the environment cut it short — untrue of a
- *  judged stop. */
-const onwardEdges = (ctx, phase) => legalLabels(ctx.rider, phase).filter((l) => l.to !== "operator" && l.label !== "resume");
-/** The labels `overrule` would accept for an ended run; empty when there is no judge's call to overrule. */
-function overrulable(ctx, run) {
-  const stop = run?.transitions?.at(-1);
-  if (run?.endedBy !== "operator" || stop?.to !== "operator" || stop.by === "executor") return [];
-  return onwardEdges(ctx, run.phase).map((l) => l.label);
-}
 const sessionName = (run, phase) => `rider ${run.rider}/${run.runId} ${phase}`;
 
 /** A fresh run: intake (the one mechanical refusal before spend, §4.3), run.json, the start phase. */
@@ -100,7 +90,7 @@ export function next(ctx, label, { because = null, dryRun = false } = {}) {
   if (to === "operator") {
     const reason = because ?? `${label} from ${run.phase}`;
     ctx.endRun(run, { endedBy: "operator", reason });
-    return { ok: true, state: "operator", runId: run.runId, reason, overrule: overrulable(ctx, run), totalCost: totalCost(run) };
+    return { ok: true, state: "operator", runId: run.runId, reason, overrule: overrulable(ctx.rider, run), totalCost: totalCost(run) };
   }
   return enterPhase(ctx, run, to, { dryRun });
 }
@@ -118,7 +108,7 @@ export function overrule(ctx, label, { because = null, dryRun = false } = {}) {
   const stop = run.transitions.at(-1);
   if (run.endedBy !== "operator" || stop?.to !== "operator") return refuse(`the last run (${run.runId}) ended by ${run.endedBy}, not at operator — nothing to overrule`);
   if (stop.by === "executor") return refuse(`run ${run.runId} was stopped by the executor, not by a judge's call (${stop.because}) — nothing to overrule; rider start [phase]`);
-  const onward = onwardEdges(ctx, run.phase);
+  const onward = onwardEdges(ctx.rider, run.phase);
   const legal = onward.map((l) => l.label).join(" · ") || "none";
   if (!label) return refuse(`overrule needs a label — edges of ${run.phase}: ${legal}`);
   const to = onward.find((l) => l.label === label)?.to ?? null;
@@ -167,7 +157,7 @@ export function status(ctx) {
   const lastEvent = ctx.readEvents().at(-1) ?? null;
   if (!run) {
     const last = ctx.lastEndedRun();
-    return { ok: true, state: "none", rider: ctx.rider.name, watcher, lastEvent, lastRun: last && { runId: last.runId, phase: last.phase, endedBy: last.endedBy, reason: last.reason, endedAt: last.endedAt, overrule: overrulable(ctx, last), totalCost: totalCost(last) } };
+    return { ok: true, state: "none", rider: ctx.rider.name, watcher, lastEvent, lastRun: last && { runId: last.runId, phase: last.phase, endedBy: last.endedBy, reason: last.reason, endedAt: last.endedAt, overrule: overrulable(ctx.rider, last), totalCost: totalCost(last) } };
   }
   const def = ctx.rider.phases[run.phase];
   const sess = currentSession(run);

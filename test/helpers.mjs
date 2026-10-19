@@ -67,12 +67,16 @@ evidence:
 Test rider: the §2.4 graph with commands that work in an empty directory.
 `;
 
-export function tmpProject({ riderMd = TEST_RIDER_MD, name = "lemmaria", prompts = { plan: "PLAN PROMPT", build: "BUILD PROMPT", close: "CLOSE PROMPT" } } = {}) {
+/** The test rider with its instances declared as the directories under `nodes/`. */
+export const INSTANCE_RIDER_MD = TEST_RIDER_MD.replace("name: lemmaria\n", "name: lemmaria\ninstances: nodes/*\n");
+
+export function tmpProject({ riderMd = TEST_RIDER_MD, name = "lemmaria", prompts = { plan: "PLAN PROMPT", build: "BUILD PROMPT", close: "CLOSE PROMPT" }, instances = [] } = {}) {
   const root = mkdtempSync(join(tmpdir(), "rider-"));
   const riderDir = join(root, "riders", name);
   mkdirSync(riderDir, { recursive: true });
   writeFileSync(join(riderDir, "RIDER.md"), riderMd);
   for (const [phase, text] of Object.entries(prompts)) writeFileSync(join(riderDir, `${phase}.md`), text);
+  for (const id of instances) mkdirSync(join(root, "nodes", id), { recursive: true });
   return { root, riderDir, file: join(riderDir, "RIDER.md"), cleanup: () => rmSync(root, { recursive: true, force: true }) };
 }
 

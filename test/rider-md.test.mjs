@@ -4,9 +4,9 @@ import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { discoverRiders, legalLabels, loadRider, validateRider } from "../scripts/lib/rider-md.mjs";
+import { discoverRiders, legalLabels, listInstances, loadRider, onwardEdges, overrulable, validateRider } from "../scripts/lib/rider-md.mjs";
 import { parseFrontmatter } from "../scripts/lib/yaml-subset.mjs";
-import { LEMMARIA_RIDER_MD } from "./helpers.mjs";
+import { INSTANCE_RIDER_MD, LEMMARIA_RIDER_MD, TEST_RIDER_MD, tmpProject } from "./helpers.mjs";
 
 const { data } = parseFrontmatter(LEMMARIA_RIDER_MD);
 const allPrompts = () => true;
@@ -69,4 +69,87 @@ test("discover + load from a temp project", () => {
   assert.throws(() => loadRider(found[0].file), /start: "nowhere" is not a declared phase/);
   assert.deepEqual(discoverRiders(join(root, "nothing-here")), []);
   rmSync(root, { recursive: true, force: true });
+});
+
+test("instances: the glob's directories are the instances, sorted, with their scopes", () => {
+  const p = tmpProject({ riderMd: INSTANCE_RIDER_MD, instances: ["b", "a", ".hidden"] });
+  try {
+    writeFileSync(join(p.root, "nodes", "x.txt"), "a file is not an instance");
+    const rider = loadRider(p.file);
+    assert.equal(rider.instances, "nodes/*");
+    const r = listInstances(p.root, rider);
+    assert.equal(r.declared, true);
+    assert.deepEqual(r.instances, [{ id: "a", scope: "nodes/a" }, { id: "b", scope: "nodes/b" }]);
+    assert.deepEqual(r.skipped, [], "a dot-directory is never matched, so it is not reported either");
+  } finally { p.cleanup(); }
+  // Nothing created yet is no instances, not an error: creating the directory is what creates one.
+  const q = tmpProject({ riderMd: INSTANCE_RIDER_MD });
+  try { assert.deepEqual(listInstances(q.root, loadRider(q.file)), { declared: true, instances: [], skipped: [] }); } finally { q.cleanup(); }
+});
+
+test("the last segment matches literally apart from *, and a glob with no parent scopes to the root", () => {
+  const root = mkdtempSync(join(tmpdir(), "rider-md-"));
+  try {
+    for (const d of ["w/v1.a", "w/v1xa", "w/v2.b", "top"]) mkdirSync(join(root, d), { recursive: true });
+    assert.deepEqual(listInstances(root, { instances: "w/v1.*" }).instances, [{ id: "v1.a", scope: "w/v1.a" }], "the . is literal");
+    assert.deepEqual(listInstances(root, { instances: "t*" }).instances, [{ id: "top", scope: "top" }]);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("a match that is not a safe id, or a reserved one, is skipped and reported", () => {
+  const p = tmpProject({ riderMd: INSTANCE_RIDER_MD, instances: ["a", "bad name", "run.json"] });
+  try {
+    const r = listInstances(p.root, loadRider(p.file));
+    assert.deepEqual(r.instances, [{ id: "a", scope: "nodes/a" }]);
+    // `run.json` is a safe id; it is skipped because the name is already used at the rider level.
+    assert.deepEqual(r.skipped, [
+      { path: "nodes/bad name", reason: "not a safe id (letters, digits, _, . and -; not starting with .)" },
+      { path: "nodes/run.json", reason: "reserved name" },
+    ]);
+  } finally { p.cleanup(); }
+});
+
+test("a rider without instances has one instance, default, at the root", () => {
+  const p = tmpProject({ instances: ["a"] });
+  try {
+    const rider = loadRider(p.file);
+    assert.equal(rider.instances, null);
+    assert.deepEqual(listInstances(p.root, rider), { declared: false, instances: [{ id: "default", scope: "." }], skipped: [] });
+  } finally { p.cleanup(); }
+});
+
+test("instances must be one relative glob with * only in the last segment", () => {
+  for (const v of ["/abs/*", "a/*/b", "../x/*", "a/b?", 42, "a\\*", "x/..", "x/[ab]", "x/{a,b}"]) {
+    const errs = validateRider({ ...structuredClone(data), instances: v }, allPrompts);
+    assert.ok(errs.some((e) => e.startsWith("instances:")), `expected an instances error for ${JSON.stringify(v)}; got ${errs.join(" | ")}`);
+  }
+  for (const v of ["nodes/*", "*", "work/v1..2-*", "nodes/fixed"]) assert.deepEqual(validateRider({ ...structuredClone(data), instances: v }, allPrompts), [], v);
+});
+
+test("a rider whose name differs from its directory is refused", () => {
+  const p = tmpProject({ name: "other" });
+  try {
+    assert.match(TEST_RIDER_MD, /^name: lemmaria$/m);
+    assert.throws(() => loadRider(p.file), /name "lemmaria" must equal its directory name "other"/);
+  } finally { p.cleanup(); }
+});
+
+test("overrulable lists onward edges only after a judge's operator stop", () => {
+  const p = tmpProject();
+  try {
+    const rider = loadRider(p.file);
+    // `operator` again is no ruling, and `resume` would tell the session the environment cut it short.
+    assert.deepEqual(onwardEdges(rider, "close"), [{ label: "gate green", to: "merge" }]);
+    assert.deepEqual(onwardEdges(rider, "merge"), [], "a human phase has no edges");
+    const stopped = (phase, extra = {}, stop = {}) => ({ phase, endedBy: "operator", transitions: [{ at: "t", from: phase, label: "operator", to: "operator", because: "x", ...stop }], ...extra });
+    assert.deepEqual(overrulable(rider, stopped("close")), ["gate green"]);
+    assert.deepEqual(overrulable(rider, stopped("plan")), ["planned"]);
+    assert.deepEqual(overrulable(rider, stopped("plan", {}, { by: "executor" })), [], "nobody judged a visit-cap stop");
+    assert.deepEqual(overrulable(rider, stopped("close", { endedBy: "reset" })), []);
+    assert.deepEqual(overrulable(rider, stopped("merge", { endedBy: "done" }, { label: "gate green", to: "merge" })), []);
+    assert.deepEqual(overrulable(rider, stopped("close", { endedBy: undefined })), [], "an active run has no stop to overrule");
+    assert.deepEqual(overrulable(rider, stopped("close", {}, { label: "gate green", to: "merge" })), [], "the last call must be the stop");
+    assert.deepEqual(overrulable(rider, { phase: "close", endedBy: "operator", transitions: [] }), []);
+    assert.deepEqual(overrulable(rider, null), []);
+  } finally { p.cleanup(); }
 });
