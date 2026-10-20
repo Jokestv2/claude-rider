@@ -144,7 +144,9 @@ for (let i = 0; i < 7 && !pids.every(pidDead); i++) sleepSync(5000);
 // session this cleanup stopped, and pay with nothing tracking it. SIGTERM, then SIGKILL after a short grace.
 for (const file of pids) {
   if (pidDead(file)) continue;
-  const pid = Number(readFileSync(file, "utf8"));
+  // A watcher that exits between the two reads removes its pid file: nothing to kill, and nothing to throw over.
+  let pid;
+  try { pid = Number(readFileSync(file, "utf8")); } catch { continue; }
   let signal = "SIGTERM";
   try { process.kill(pid, signal); } catch { continue; }
   for (let i = 0; i < 10 && isAlive(pid); i++) sleepSync(500);
