@@ -1,7 +1,7 @@
 // test/watcher-spawn.test.mjs
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { instancePaths } from "../scripts/lib/store.mjs";
@@ -75,5 +75,25 @@ test("the watcher is spawned per instance", () => {
     assert.equal(readFileSync(join(root, ".rider", "lemmaria", "b", "watch.pid"), "utf8").trim(), "778");
     assert.equal(ensureWatcher(a, { riderName: "lemmaria", instance: "a", root, script: "/x/rider.mjs", alive, spawn }), false);
     assert.equal(calls.length, 2);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("a watch.pid written before the boot reads as dead, even when its pid is alive", () => {
+  // After a reboot the pid can name an unrelated process: the wait would never be polled while the board shows running.
+  const root = mkdtempSync(join(tmpdir(), "rider-watch-"));
+  try {
+    const paths = instancePaths(root, "lemmaria", "default");
+    writeWatchPid(paths, process.pid);
+    const bootMs = Date.now() - 60_000;
+    const hourAgo = new Date(Date.now() - 3_600_000);
+    utimesSync(paths.watchPid, hourAgo, hourAgo);
+    assert.equal(watcherAlive(paths, () => true, { bootMs }), null);
+    // Within the slack of the boot, the file is not misread as written before it.
+    const justBefore = new Date(bootMs - 1000);
+    utimesSync(paths.watchPid, justBefore, justBefore);
+    assert.equal(watcherAlive(paths, () => true, { bootMs }), process.pid);
+    const fresh = new Date();
+    utimesSync(paths.watchPid, fresh, fresh);
+    assert.equal(watcherAlive(paths, () => true, { bootMs }), process.pid);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

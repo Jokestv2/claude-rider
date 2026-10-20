@@ -119,6 +119,52 @@ test("a lock from another host is never broken", () => {
   rmSync(root, { recursive: true, force: true });
 });
 
+test("a same-host lock taken before the boot is broken although its pid is alive", () => {
+  const root = tmpRoot();
+  const paths = instancePaths(root, "lemmaria", "default");
+  lockAt(paths, { pid: process.pid, host: hostname(), at: now.toISOString(), nonce: "x", up: 5000 });
+  const release = acquireLock(paths, { uptime: () => 60, timeoutMs: 0 });
+  const holder = JSON.parse(readFileSync(paths.lock, "utf8"));
+  assert.notEqual(holder.nonce, "x");
+  assert.equal(holder.up, 60);
+  release();
+  assert.equal(existsSync(paths.lock), false);
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("a same-host lock taken since the boot, by a live pid, is not broken", () => {
+  const root = tmpRoot();
+  const paths = instancePaths(root, "lemmaria", "default");
+  lockAt(paths, { pid: process.pid, host: hostname(), at: now.toISOString(), nonce: "x", up: 50 });
+  const clock = new FakeClock();
+  assert.throws(() => acquireLock(paths, { uptime: () => 60, timeoutMs: 1000, now: clock.now, sleep: clock.sleep }), /locked by pid/);
+  assert.equal(JSON.parse(readFileSync(paths.lock, "utf8")).nonce, "x");
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("a pre-boot lock from another host is still never broken", () => {
+  const root = tmpRoot();
+  const paths = instancePaths(root, "lemmaria", "default");
+  lockAt(paths, { pid: process.pid, host: "elsewhere", at: now.toISOString(), nonce: "x", up: 5000 });
+  assert.throws(() => acquireLock(paths, { uptime: () => 60, timeoutMs: 0 }), /on elsewhere/);
+  assert.equal(JSON.parse(readFileSync(paths.lock, "utf8")).nonce, "x");
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("a lock with no up falls back to the pid test", () => {
+  // A lock written by 0.2 records no uptime: a live pid holds it, a dead one does not.
+  const root = tmpRoot();
+  const paths = instancePaths(root, "lemmaria", "default");
+  lockAt(paths, { pid: process.pid, host: hostname(), at: now.toISOString(), nonce: "x" });
+  const clock = new FakeClock();
+  assert.throws(() => acquireLock(paths, { uptime: () => 60, timeoutMs: 1000, now: clock.now, sleep: clock.sleep }), /locked by pid/);
+  assert.equal(JSON.parse(readFileSync(paths.lock, "utf8")).nonce, "x");
+  const release = acquireLock(paths, { uptime: () => 60, alive: () => false, timeoutMs: 0 });
+  assert.notEqual(JSON.parse(readFileSync(paths.lock, "utf8")).nonce, "x");
+  release();
+  rmSync(root, { recursive: true, force: true });
+});
+
 test("an empty lock file is waited on, not broken", () => {
   const root = tmpRoot();
   const paths = instancePaths(root, "lemmaria", "default");

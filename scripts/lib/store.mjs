@@ -1,9 +1,9 @@
 // scripts/lib/store.mjs
 import { randomBytes } from "node:crypto";
 import { appendFileSync, closeSync, existsSync, linkSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { hostname } from "node:os";
+import { hostname, uptime as osUptime } from "node:os";
 import { dirname, join } from "node:path";
-import { isAlive, sleepSync } from "./proc.mjs";
+import { isAlive, rebootedSince, sleepSync } from "./proc.mjs";
 
 /** The events the watcher appends and `await` wakes on; every other kind is a record of a committed write (§6.2). */
 export const WAKE_KINDS = ["done", "gone", "waiting", "intervened", "rate-limited", "watcher-stopped"];
@@ -85,8 +85,9 @@ export const endedRunPath = (paths, run) => join(paths.runs, `${run.startedAt.re
 const readOrNull = (path) => { try { return readFileSync(path, "utf8"); } catch (e) { if (e.code === "ENOENT") return null; throw e; } };
 const parseOrNull = (text) => { try { return JSON.parse(text); } catch { return null; } };
 /** One writer per instance (§7.1). Exclusive create is the lock; its content says who holds it, so a holder that
- *  died on this host can be told from a live one. A holder elsewhere cannot be checked, so it is never broken. */
-export function acquireLock(paths, { timeoutMs = 60_000, retryMs = 200, now = () => new Date(), sleep = sleepSync, alive = isAlive, host = hostname() } = {}) {
+ *  died on this host can be told from a live one. Its uptime tells a holder from before a reboot, whose pid may now
+ *  name another process (§7.10). A holder elsewhere cannot be checked, so it is never broken. */
+export function acquireLock(paths, { timeoutMs = 60_000, retryMs = 200, now = () => new Date(), sleep = sleepSync, alive = isAlive, host = hostname(), uptime = osUptime } = {}) {
   mkdirSync(paths.dir, { recursive: true });
   const nonce = randomBytes(8).toString("hex");
   const deadline = now().getTime() + timeoutMs;
@@ -95,15 +96,16 @@ export function acquireLock(paths, { timeoutMs = 60_000, retryMs = 200, now = ()
     try { fd = openSync(paths.lock, "wx"); } catch (e) { if (e.code !== "EEXIST") throw e; }
     if (fd !== null) {
       // An empty lock is never broken, so a failed write must not leave one behind.
-      try { writeFileSync(fd, JSON.stringify({ pid: process.pid, host, at: now().toISOString(), nonce })); } catch (e) { closeSync(fd); rmSync(paths.lock, { force: true }); throw e; }
+      try { writeFileSync(fd, JSON.stringify({ pid: process.pid, host, at: now().toISOString(), nonce, up: uptime() })); } catch (e) { closeSync(fd); rmSync(paths.lock, { force: true }); throw e; }
       closeSync(fd);
       return () => { const text = readOrNull(paths.lock); if (text !== null && parseOrNull(text)?.nonce === nonce) rmSync(paths.lock, { force: true }); };
     }
     const text = readOrNull(paths.lock);
     if (text === null) continue; // released since our create failed: try again at once
     // Empty or unparsable: a holder between its create and its write. Wait for it.
+    // A holder from before a reboot is stale whatever its pid now names; a lock with no `up` (0.2's) has only its pid to go on.
     const holder = parseOrNull(text);
-    if (holder?.host === host && !alive(holder.pid) && breakStale(paths.lock, text)) continue;
+    if (holder?.host === host && (!alive(holder.pid) || rebootedSince(holder.up, uptime())) && breakStale(paths.lock, text)) continue;
     if (now().getTime() >= deadline) {
       if (!holder) throw new Error(`instance ${paths.instance} is locked by pid ? on ? since ? (${paths.lock} names no holder; remove it if no rider verb is running)`);
       throw new Error(`instance ${paths.instance} is locked by pid ${holder.pid} on ${holder.host} since ${holder.at ?? "?"}`);

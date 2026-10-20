@@ -1,8 +1,8 @@
 // scripts/lib/watcher-spawn.mjs
 import { spawn as nodeSpawn } from "node:child_process";
-import { existsSync, mkdirSync, openSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, openSync, readFileSync, rmSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { isAlive } from "./proc.mjs";
+import { bootTime, isAlive, writtenBeforeBoot } from "./proc.mjs";
 import { writeJsonAtomic } from "./store.mjs";
 
 const RIDER_SCRIPT = fileURLToPath(new URL("../rider.mjs", import.meta.url));
@@ -16,9 +16,14 @@ function readPid(path) {
 /** Replaced whole by a rename: board, status and await read it with no lock, and must never find it empty. */
 export function writeWatchPid(paths, pid) { writeJsonAtomic(paths.watchPid, pid); }
 
-export function watcherAlive(paths, alive = isAlive) {
+/** After a reboot the pid in a surviving watch.pid can name an unrelated process (§7.10); the file is replaced whole, so its mtime is when it was written.
+ *  The board and status read it with no lock, while `killWatcher` may be removing it. */
+export function watcherAlive(paths, alive = isAlive, { bootMs = bootTime() } = {}) {
   const pid = readPid(paths.watchPid);
-  return pid && alive(pid) ? pid : null;
+  if (!pid || !alive(pid)) return null;
+  let mtimeMs;
+  try { mtimeMs = statSync(paths.watchPid).mtimeMs; } catch (e) { if (e.code === "ENOENT") return null; throw e; }
+  return writtenBeforeBoot(mtimeMs, bootMs) ? null : pid;
 }
 
 /** One watcher per instance with a live phase, detached from the invoking process tree (§4.6, §13). The caller holds
