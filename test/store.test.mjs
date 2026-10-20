@@ -122,11 +122,11 @@ test("a lock from another host is never broken", () => {
 test("a same-host lock taken before the boot is broken although its pid is alive", () => {
   const root = tmpRoot();
   const paths = instancePaths(root, "lemmaria", "default");
-  lockAt(paths, { pid: process.pid, host: hostname(), at: now.toISOString(), nonce: "x", up: 5000 });
-  const release = acquireLock(paths, { uptime: () => 60, timeoutMs: 0 });
+  lockAt(paths, { pid: process.pid, host: hostname(), at: now.toISOString(), nonce: "x", wallAt: Date.now() - 3_600_000 });
+  const release = acquireLock(paths, { bootMs: Date.now() - 60_000, timeoutMs: 0 });
   const holder = JSON.parse(readFileSync(paths.lock, "utf8"));
   assert.notEqual(holder.nonce, "x");
-  assert.equal(holder.up, 60);
+  assert.ok(Date.now() - holder.wallAt >= 0 && Date.now() - holder.wallAt < 5000, `wallAt ${holder.wallAt} is the real clock's now`);
   release();
   assert.equal(existsSync(paths.lock), false);
   rmSync(root, { recursive: true, force: true });
@@ -135,31 +135,35 @@ test("a same-host lock taken before the boot is broken although its pid is alive
 test("a same-host lock taken since the boot, by a live pid, is not broken", () => {
   const root = tmpRoot();
   const paths = instancePaths(root, "lemmaria", "default");
-  lockAt(paths, { pid: process.pid, host: hostname(), at: now.toISOString(), nonce: "x", up: 50 });
-  const clock = new FakeClock();
-  assert.throws(() => acquireLock(paths, { uptime: () => 60, timeoutMs: 1000, now: clock.now, sleep: clock.sleep }), /locked by pid/);
-  assert.equal(JSON.parse(readFileSync(paths.lock, "utf8")).nonce, "x");
+  const bootMs = Date.now() - 60_000;
+  // Within the slack of the boot, a lock is not misread as written before it.
+  for (const wallAt of [Date.now() - 30_000, bootMs - 1000]) {
+    lockAt(paths, { pid: process.pid, host: hostname(), at: now.toISOString(), nonce: "x", wallAt });
+    const clock = new FakeClock();
+    assert.throws(() => acquireLock(paths, { bootMs, timeoutMs: 1000, now: clock.now, sleep: clock.sleep }), /locked by pid/);
+    assert.equal(JSON.parse(readFileSync(paths.lock, "utf8")).nonce, "x");
+  }
   rmSync(root, { recursive: true, force: true });
 });
 
 test("a pre-boot lock from another host is still never broken", () => {
   const root = tmpRoot();
   const paths = instancePaths(root, "lemmaria", "default");
-  lockAt(paths, { pid: process.pid, host: "elsewhere", at: now.toISOString(), nonce: "x", up: 5000 });
-  assert.throws(() => acquireLock(paths, { uptime: () => 60, timeoutMs: 0 }), /on elsewhere/);
+  lockAt(paths, { pid: process.pid, host: "elsewhere", at: now.toISOString(), nonce: "x", wallAt: Date.now() - 3_600_000 });
+  assert.throws(() => acquireLock(paths, { bootMs: Date.now() - 60_000, timeoutMs: 0 }), /on elsewhere/);
   assert.equal(JSON.parse(readFileSync(paths.lock, "utf8")).nonce, "x");
   rmSync(root, { recursive: true, force: true });
 });
 
-test("a lock with no up falls back to the pid test", () => {
-  // A lock written by 0.2 records no uptime: a live pid holds it, a dead one does not.
+test("a lock with no wallAt falls back to the pid test", () => {
+  // A lock written by 0.2 records no real-clock write time: a live pid holds it, a dead one does not.
   const root = tmpRoot();
   const paths = instancePaths(root, "lemmaria", "default");
   lockAt(paths, { pid: process.pid, host: hostname(), at: now.toISOString(), nonce: "x" });
   const clock = new FakeClock();
-  assert.throws(() => acquireLock(paths, { uptime: () => 60, timeoutMs: 1000, now: clock.now, sleep: clock.sleep }), /locked by pid/);
+  assert.throws(() => acquireLock(paths, { bootMs: Date.now() - 60_000, timeoutMs: 1000, now: clock.now, sleep: clock.sleep }), /locked by pid/);
   assert.equal(JSON.parse(readFileSync(paths.lock, "utf8")).nonce, "x");
-  const release = acquireLock(paths, { uptime: () => 60, alive: () => false, timeoutMs: 0 });
+  const release = acquireLock(paths, { bootMs: Date.now() - 60_000, alive: () => false, timeoutMs: 0 });
   assert.notEqual(JSON.parse(readFileSync(paths.lock, "utf8")).nonce, "x");
   release();
   rmSync(root, { recursive: true, force: true });
