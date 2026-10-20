@@ -5,8 +5,9 @@ import { sh } from "./shell.mjs";
  *  refusal, never a pass. */
 export const REQUIRES_CAP = { timeoutMs: 10_000, capBytes: 2048 };
 
-/** The phase kinds `start` may enter (§6.2): any declared phase, a gate included. The one place a kind is admitted. */
-const STARTABLE = new Set(["session", "human"]);
+/** The phase kinds `start` may enter: any declared phase, a gate (§6.2) and a wait (§7.5) included, so a fresh run after a
+ *  reset or a reboot goes straight back to the wait. The one place a kind is admitted. */
+const STARTABLE = new Set(["session", "human", "await"]);
 
 /** The first non-empty line of a command's output, trimmed (a `\r` with it): what a one-line answer, or one entry of a
  *  readout, has room for. */
@@ -94,7 +95,7 @@ export function startPreflight(ctx, { phase = null } = {}) {
     // check, and a locate that keeps naming it would loop the judge (§6.2). It runs as `check` runs it, with `sh`'s 30 s.
     if (sh(def.check, ctx.shellOpts({ phase: target, baseBranch })).status === 0) return refused(`${target}'s check already passes; nothing waits on the operator there`, "gate", target);
   } else {
-    // The run's door first, then the phase's: a fresh run leaves no phase and takes no label.
+    // A session phase or a wait. The run's door first, then the phase's: a fresh run leaves no phase and takes no label.
     const req = requiresFor(ctx, { run: { phase: target, baseBranch }, to: target });
     if (!req.ok) return refused(req.error, req.cause, target);
   }

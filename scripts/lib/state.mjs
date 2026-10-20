@@ -5,7 +5,7 @@ import { readJson, writeJsonAtomic } from "./store.mjs";
 
 /** Machine facts and overrides (§4.2), one file per rider (`riderPaths(...).local`). Keys not listed here are kept but unused. */
 export function loadLocal(rp) {
-  return { maxWaitHours: 6, pollSeconds: 30, models: {}, advisor: null, launchArgs: [], claudePath: null, shell: null, permissionMode: "auto", staleDecisionMinutes: 20, ...readJson(rp.local, {}) };
+  return { maxWaitHours: 6, pollSeconds: 30, models: {}, advisor: null, launchArgs: [], claudePath: null, shell: null, permissionMode: "auto", staleDecisionMinutes: 20, awaitCheckFailures: 3, ...readJson(rp.local, {}) };
 }
 /** A run id is unique within its instance (§5): one reused would let a stale key `<runId>.<n>` match another run's
  *  stretch. Four hex digits collide often enough over an instance's life, so `taken` (the ids on file) is re-rolled past. */
@@ -41,15 +41,16 @@ export function riderEnv(rider, run, instance, { phase, fromPhase = "", label = 
 export function writeLog(paths, name, data) { const p = join(paths.logs, name); writeJsonAtomic(p, data); return p; }
 /** The decision key of a stretch (§8): the run, then the stretch's 1-based place in `sessions`. */
 export const keyOf = (run, sess) => `${run.runId}.${run.sessions.indexOf(sess) + 1}`;
-/** Whether something is running that a watcher must observe. Asked of the phase kind, not of "has a session": rider
- *  0.2's await phase is live with no session at all, and adds its case here (§13). */
+/** Whether something is running that a watcher must observe. Asked of the phase kind, not of "has a session": an await
+ *  phase launches none, and is live while its wait is awaiting the check the watcher polls (§7.5). A gate never is. */
 export function isLive(run, rider) {
-  if (!run || rider.phases[run.phase]?.kind !== "session") return false;
-  const sess = currentSession(run);
-  return sess?.outcome === "running" || sess?.outcome === "waiting";
+  const kind = run ? rider.phases[run.phase]?.kind : null;
+  const sess = kind ? currentSession(run) : null;
+  if (kind === "session") return sess?.outcome === "running" || sess?.outcome === "waiting";
+  return kind === "await" && sess?.outcome === "awaiting";
 }
 /** Whether a session has worked on this run, so that entering a gate hands something over (§6.2). A wait is no session:
- *  session records keep no `kind` (§7.4), so the test is written to hold once waits are recorded beside them. */
+ *  waits are recorded beside sessions with `kind: "await"`, and session records keep no `kind` (§7.4). */
 export const hasSessionStretch = (run) => run.sessions.some((s) => s.kind !== "await");
 /** A rate-limited stretch no human turn reached is the watcher's to resume after the reset: with its watcher alive,
  *  status and await read it as running through this, and the board by its rule order (intervened first), so nothing

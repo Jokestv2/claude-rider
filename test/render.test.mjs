@@ -172,3 +172,40 @@ test("the block printed on entering a human phase carries the drift line, and st
   const started = render("start", { ...human, branchDrift: null, note: "located build; entering merge on the operator's word" }).split("\n");
   assert.deepEqual(started.slice(0, 2), ["note: located build; entering merge on the operator's word", "rider lemmaria/a/3f2a · phase merge is yours"]);
 });
+
+test("an entry that lands on a wait prints the check it waits on, never a session", () => {
+  const awaiting = { ok: true, state: "awaiting", runId: "3f2a", phase: "wait", visit: 2, key: "3f2a.5", check: "tool jobs tick --current", pollSeconds: 300, deadline: "2026-10-24T01:12:00.000Z" };
+  assert.deepEqual(render("next", awaiting).split("\n"), ["wait awaiting: $ tool jobs tick --current every 300 s until 2026-10-24T01:12:00.000Z", "visit 2 of run 3f2a · stretch 3f2a.5"]);
+  assert.deepEqual(render("overrule", { ...awaiting, deadline: null }).split("\n"), ["wait awaiting: $ tool jobs tick --current every 300 s", "visit 2 of run 3f2a · stretch 3f2a.5"]);
+  assert.equal(render("start", { ...awaiting, note: "located plan; entering wait on the operator's word" }).split("\n")[0], "note: located plan; entering wait on the operator's word");
+  const dry = { ok: true, state: "dry-run", phase: "wait", await: true, check: "tool jobs tick --current", entry: { by: "locate", located: "wait", phase: "wait" } };
+  assert.deepEqual(render("start", dry).split("\n"), ["[dry-run] wait (await): tool jobs tick --current", "entry: wait by locate"]);
+});
+
+test("status at a wait: an await row, the wait line, and the hint to arm await or relay a failing check", () => {
+  const wait = { check: "tool jobs tick --current", at: "2026-10-21T01:12:00.000Z", polls: 169, lastPollAt: "2026-10-21T15:15:00.000Z", lastExit: 75, lastError: null, failures: 0, failing: false, failingSince: null, deadline: "2026-10-24T01:12:00.000Z", readyAt: null, timedOutAt: null };
+  const st = {
+    ok: true, state: "awaiting", outcome: "awaiting", rider: "lemmaria", instance: "a", targetFlags: "--instance a", runId: "3f2a", key: "3f2a.2", phase: "wait", visits: { plan: 1, wait: 1 }, baseBranch: "main", startedAt: "2026-10-21T00:00:00.000Z", watcher: 4242, lastEvent: null, totalCost: 12,
+    sessions: [
+      { key: "3f2a.1", kind: "session", phase: "plan", model: "fable", shortId: "ce34947e", outcome: "done", cost: 12, turns: 40, at: "2026-10-21T00:00:00.000Z", resumedFrom: null },
+      { key: "3f2a.2", kind: "await", phase: "wait", outcome: "awaiting", cost: null, turns: null, at: wait.at, resumedFrom: null },
+    ],
+    transitions: [], notes: [], attach: null, wait,
+  };
+  const lines = render("status", st).split("\n");
+  assert.equal(lines[0], "rider lemmaria/a/3f2a · phase wait (visit 1) · stretch 3f2a.2 · branch main · started 2026-10-21T00:00:00.000Z");
+  assert.match(lines[1], /^state: awaiting   watcher: alive \(pid 4242\)/);
+  assert.equal(lines[2], "  plan     fable   ce34947e  done          $12.00  40 turns");
+  assert.equal(lines[3], "  wait     await   -         awaiting");
+  assert.equal(lines[4], "wait: $ tool jobs tick --current · 169 polls · last exit 75 at 2026-10-21T15:15:00.000Z · deadline 2026-10-24T01:12:00.000Z");
+  assert.equal(lines.at(-1), "next: arm rider await --instance a (background) and stop");
+  // Before the first poll, and with no deadline.
+  const fresh = render("status", { ...st, wait: { ...wait, polls: 0, lastPollAt: null, lastExit: null, deadline: null } });
+  assert.match(fresh, /^wait: \$ tool jobs tick --current · 0 polls · no poll yet$/m);
+  const failing = render("status", { ...st, wait: { ...wait, lastExit: 127, failures: 3, failing: true, failingSince: "2026-10-21T15:05:00.000Z" } }).split("\n");
+  assert.equal(failing[5], "check failing: 3 in a row since 2026-10-21T15:05:00.000Z");
+  assert.equal(failing.at(-1), "next: relay the failing check to the operator, then arm rider await --instance a");
+  const ready = render("status", { ...st, state: "finished", outcome: "ready", wait: { ...wait, lastExit: 0, readyAt: "2026-10-21T15:15:00.000Z" } });
+  assert.match(ready, /^next: rider check --instance a, then the command its decide-with line prints$/m);
+  assert.doesNotMatch(ready, /check failing/);
+});

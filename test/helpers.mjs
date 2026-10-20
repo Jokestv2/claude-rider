@@ -77,6 +77,37 @@ export const requiring = (phase, cmds, md = TEST_RIDER_MD) => md.replace(`\n  ${
 export const REQUIRES_RIDER_MD = requiring("build", ["test -f ok.flag"]);
 /** What a session on instance `a` of that rider is told (§12), written out rather than built: the exact text is the spec's. */
 export const FACT_A = "This run serves instance `a` of the rider `lemmaria`. The instance's directory is `nodes/a`, relative to the project root.";
+/** The test rider with an await phase (§7.1) between two session phases: `wait` polls for `ready.flag`, `review` may
+ *  send the run back to it, and a fresh run may enter it on the operator's word or `locate`'s. */
+export const AWAIT_RIDER_MD = `---
+name: lemmaria
+start: plan
+phases:
+  plan:
+    model: fable
+    edges: { planned: wait, blocked: operator }
+  wait:
+    await: true
+    check: test -f ready.flag || exit 75
+    show: echo SHOW-WAIT
+    pollSeconds: 60
+    timeoutHours: 2
+    edges: { settled: review, timed out: operator }
+  review:
+    model: opus
+    edges: { more: wait, done: merge, blocked: operator }
+  merge:
+    human: true
+    check: test -f merged.flag
+intake:
+  - test -d riders
+evidence:
+  - echo evidence-ok
+---
+Test rider: a wait between two sessions, with commands that work in an empty directory.
+`;
+/** The prompt files `AWAIT_RIDER_MD`'s session phases need; pass as `tmpProject`'s `prompts`. */
+export const AWAIT_PROMPTS = { plan: "PLAN PROMPT", review: "REVIEW PROMPT" };
 
 export function tmpProject({ riderMd = TEST_RIDER_MD, name = "lemmaria", prompts = { plan: "PLAN PROMPT", build: "BUILD PROMPT", close: "CLOSE PROMPT" }, instances = [] } = {}) {
   const root = mkdtempSync(join(tmpdir(), "rider-"));

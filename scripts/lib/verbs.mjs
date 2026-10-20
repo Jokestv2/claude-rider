@@ -4,7 +4,7 @@ import { RUN, driftOf, readouts } from "./check.mjs";
 import { currentKey, nowLine, parseRunKey, parseStretchKey, snapshot, targetFlags } from "./keys.mjs";
 import { edgePreflight, startPreflight } from "./preflight.mjs";
 import { legalLabels, onwardEdges, overrulable } from "./rider-md.mjs";
-import { awaitsReset, currentSession, hasSessionStretch, keyOf, newRun, scopeOf, totalCost } from "./state.mjs";
+import { awaitsReset, currentSession, hasSessionStretch, isLive, keyOf, newRun, scopeOf, totalCost } from "./state.mjs";
 
 /** `cause` names the entry command that refused (§4), as the `refused` event records it; a usage error has none. */
 export function refuse(error, cause = null) { return { ok: false, error, ...(cause ? { cause } : {}) }; }
@@ -68,14 +68,17 @@ export function instanceFacts(ctx) {
 }
 
 const activeRefusal = (run) => refuse(`run ${run.runId} is active at phase ${run.phase} — rider check, next, or reset first`);
+/** A wait has no transcript to re-enter (§7.5): a rider that wants to wait more declares an edge back to the phase. */
+const noResume = (phase) => refuse(`${phase} has no session to resume: an await phase waits on its check, and waiting again is an edge back to it`);
 
 /** The hold's half of an edge's pre-flight (§4). The key matched, so a target with `requires` is entered only on a pass
  *  computed for this phase and this target. A failed one changes nothing: it is recorded as `refused`, except under
  *  --dry-run, and the same decision is retryable once the condition holds. */
 function requiresRefusal(ctx, pre, { run, to, on, by, dryRun }) {
   if (!ctx.rider.phases[to]?.requires?.length) return null;
-  // Unreachable for `next`, whose stretch key pins the phase. A run key does not: the run may have been revived and
-  // stopped again, at another phase, while the commands ran.
+  // For `next`, whose stretch key pins the phase, only when its unlocked read found the stretch still live and ran
+  // nothing, and it stopped before the hold. A run key pins less: the run may have been revived and stopped again, at
+  // another phase, while the commands ran. Either way the same decision, sent again, runs them.
   if (!pre || pre.to !== to || pre.from !== run.phase) return refuse("the instance changed while its preconditions ran — run it again");
   if (pre.result.ok) return null;
   if (!dryRun) ctx.event("refused", { runId: run.runId, phase: run.phase, key: on, text: pre.result.error, by, cause: "requires" });
@@ -111,7 +114,7 @@ export function start(ctx, { phase = null, dryRun = false, by = "judge" } = {}) 
   }));
 }
 
-/** Enter `phase` on `run`: count the visit, stop at a human phase, or launch a session. */
+/** Enter `phase` on `run`: count the visit, then stop at a human phase, start a wait, or launch a session. */
 export function enterPhase(ctx, run, phase, { dryRun = false } = {}) {
   const def = ctx.rider.phases[phase];
   const at = ctx.now().toISOString();
@@ -140,6 +143,7 @@ export function enterPhase(ctx, run, phase, { dryRun = false } = {}) {
     // The drift the run last saw, as `check`'s human block prints it: nothing else looks at the tree at a gate.
     return { ok: true, state: "human", rider: run.rider, instance: ctx.instance.id, runId: run.runId, phase, check: def.check, show: null, notes: run.notes, totalCost: totalCost(run), ...driftOf(run), [RUN]: run };
   }
+  if (def.kind === "await") return enterWait(ctx, run, phase, def, at, { dryRun });
   const prompt = readFileSync(def.prompt, "utf8");
   const model = ctx.local.models?.[phase] ?? def.model;
   const name = sessionName(run, ctx.instance.id, phase);
@@ -162,18 +166,42 @@ export function enterPhase(ctx, run, phase, { dryRun = false } = {}) {
   return { ok: true, state: "running", runId: run.runId, phase, visit: run.visits[phase], model, session: ids, attach: ctx.binding.attachHint(ids) };
 }
 
-/** The judge's decision: a label from the current phase's edges (§4.3), or the two reserved ones. The target's
- *  `requires` run before the lock (§4), and only on the current key: a stale one is refused in the hold without them. */
+/** A wait, as its record has it: no session, and live while awaiting (§7.4). The watcher starts polling at once, and
+ *  a back-edge to the phase adds a new record, so a new key. The deadline is counted from entry, never from a poll. */
+function enterWait(ctx, run, phase, def, at, { dryRun }) {
+  if (dryRun) return { ok: true, state: "dry-run", phase, await: true, check: def.check };
+  const deadline = def.timeoutHours == null ? null : new Date(Date.parse(at) + def.timeoutHours * 3_600_000).toISOString();
+  const wait = { kind: "await", phase, at, check: def.check, outcome: "awaiting", polls: 0, lastPollAt: null, lastExit: null, lastError: null, lastOutput: null, failures: 0, failingSince: null, failingEmitted: false, deadline, readyAt: null, timedOutAt: null, watcherSpawns: 0 };
+  run.sessions.push(wait);
+  ctx.saveRun(run);
+  if (ctx.ensureWatcher()) { wait.watcherSpawns++; ctx.saveRun(run); }
+  const key = keyOf(run, wait);
+  ctx.event("phase-entered", { runId: run.runId, phase, key, text: `visit ${run.visits[phase]} · await: ${def.check} every ${def.pollSeconds} s` });
+  return { ok: true, state: "awaiting", runId: run.runId, phase, visit: run.visits[phase], key, check: def.check, pollSeconds: def.pollSeconds, deadline };
+}
+
+/** The judge's decision: a label from the current phase's edges (§4.3), or the reserved ones its kind admits. The
+ *  target's `requires` run before the lock (§4), and only on the current key of a stretch the hold could decide: a
+ *  stale key, or a stretch still live, is refused in the hold without them. */
 export function next(ctx, label, { on, because = null, by = "judge", dryRun = false } = {}) {
   const seen = ctx.loadRun();
-  const pre = seen && currentKey(seen) === on ? edgePreflight(ctx, seen, { on, label }) : null;
+  const pre = seen && currentKey(seen) === on && !isLive(seen, ctx.rider) ? edgePreflight(ctx, seen, { on, label }) : null;
   return readouts(ctx, ctx.update(() => {
     const refused = keyRefusal(ctx, "next", on, { dryRun, by });
     if (refused) return refused;
-    // The key matched, so the run is active and its phase has a session: a human phase has no key to match.
+    // The key matched, so the run is active and its phase has a stretch: a human phase has no key to match.
     const run = ctx.loadRun();
-    if (!label) return refuse(`next needs a label — legal: ${labelList(ctx, run.phase)}`);
     const sess = currentSession(run);
+    if (ctx.rider.phases[run.phase].kind === "await") {
+      // Decided against the stored poll, never a new one (§16 C4). While it is awaiting, the judge has nothing to judge,
+      // and only the operator may end it early (§16 C6): the watcher is left to find the run moved on.
+      if (sess.outcome === "awaiting" && !(label === "operator" && by === "operator")) {
+        const flags = flagsOf(ctx);
+        return refuse(`${run.phase} is awaiting its check (poll ${sess.polls}, last exit ${sess.lastExit ?? "none"}): only the operator ends a wait early — rider next operator${flags ? ` ${flags}` : ""} --on ${on} --by operator --because "…"`);
+      }
+      if (label === "resume") return noResume(run.phase);
+    }
+    if (!label) return refuse(`next needs a label — legal: ${labelList(ctx, run.phase)}`);
     if (sess.outcome === "running" || sess.outcome === "waiting") return refuse(`${run.phase} is still ${sess.outcome} — rider check first`);
     if (label === "resume") return resume(ctx, { on, because, by, dryRun });
     // Only the declared labels: a label like "toString" must not read through Object.prototype on the phase's edges.
@@ -238,6 +266,7 @@ export function resume(ctx, { on, because = null, by = "judge", reason = null, d
     if (refused) return refused;
     const run = ctx.loadRun();
     const def = ctx.rider.phases[run.phase];
+    if (def.kind === "await") return noResume(run.phase);
     const prev = currentSession(run);
     if (!prev.id) return refuse(`no session to resume for ${run.phase}`);
     if (prev.outcome === "running" || prev.outcome === "waiting") return refuse(`session ${prev.shortId} is ${prev.outcome} — rider check first`);
@@ -276,17 +305,25 @@ export function status(ctx) {
   if (!run) return { ok: true, state: "none", rider: ctx.rider.name, ...where, watcher, lastEvent, lastRun };
   const def = ctx.rider.phases[run.phase];
   const sess = currentSession(run);
-  // A rate-limited stretch its live watcher will resume is running, not finished: its hint is await, not decide.
-  const state = def.kind === "human" ? "human" : !sess ? "none" : sess.outcome === "running" || (awaitsReset(sess) && watcher) ? "running" : sess.outcome === "waiting" ? "waiting" : "finished";
+  const wait = def.kind === "await" && sess ? sess : null;
+  // A rate-limited stretch its live watcher will resume is running, not finished: its hint is await, not decide. A wait
+  // the watcher still polls is awaiting; a ready or timed-out one is finished, for the judge to decide.
+  const state = def.kind === "human" ? "human" : !sess ? "none" : wait ? (wait.outcome === "awaiting" ? "awaiting" : "finished") : sess.outcome === "running" || (awaitsReset(sess) && watcher) ? "running" : sess.outcome === "waiting" ? "waiting" : "finished";
   return {
     ok: true, state, rider: run.rider, ...where, runId: run.runId, key: currentKey(run), phase: run.phase, visits: run.visits, baseBranch: run.baseBranch ?? null, workBranch: run.workBranch ?? null, workTip: run.workTip ?? null, branchDrift: run.branchDrift ?? null, startedAt: run.startedAt, watcher, lastEvent,
+    ...(wait ? { outcome: wait.outcome, wait: waitReadout(ctx, wait) } : {}),
     totalCost: totalCost(run),
-    sessions: run.sessions.map((s) => ({ key: keyOf(run, s), phase: s.phase, model: s.model, shortId: s.shortId, id: s.id, outcome: s.outcome, cost: s.cost ?? null, turns: s.turns ?? null, at: s.at, resumedFrom: s.resumedFrom ?? null })),
+    // Session records keep no kind (§7.4); a row names its own, so a reader never has to infer it.
+    sessions: run.sessions.map((s) => ({ key: keyOf(run, s), kind: s.kind ?? "session", phase: s.phase, model: s.model, shortId: s.shortId, id: s.id, outcome: s.outcome, cost: s.cost ?? null, turns: s.turns ?? null, at: s.at, resumedFrom: s.resumedFrom ?? null })),
     transitions: run.transitions, notes: run.notes,
     attach: sess?.shortId ? ctx.binding.attachHint({ shortId: sess.shortId, sessionId: sess.id }) : null,
     lastRun,
   };
 }
+
+/** What status shows of a wait: the stored poll, never a new one. A failing check is no state of its own: an awaiting
+ *  wait whose errors in a row reached `local.json`'s threshold (§7.5). */
+const waitReadout = (ctx, w) => ({ check: w.check, at: w.at, polls: w.polls, lastPollAt: w.lastPollAt, lastExit: w.lastExit, lastError: w.lastError, failures: w.failures, failing: w.failures >= ctx.local.awaitCheckFailures, failingSince: w.failingSince, deadline: w.deadline, readyAt: w.readyAt, timedOutAt: w.timedOutAt });
 
 /** A note lands on the active run, or on the last ended one: what the operator found at the gate is
  *  usually said after the merge, and the merge is what ended the run. */
@@ -310,11 +347,13 @@ export function reset(ctx, { on, because = null, by = "judge" } = {}) {
     const refused = keyRefusal(ctx, "reset", on, { by });
     if (refused) return refused;
     const run = ctx.loadRun();
+    // With the watcher goes the group of any check it left running (§7.3.1): a forgotten wait leaves nothing behind.
     ctx.killWatcher();
     // Forgetting a live phase leaves a paid session running with nothing tracking it: name it, and say
     // how to stop it. The harness-shaped stop line comes from the binding (§5), never from here.
     const sess = currentSession(run);
-    const live = sess && (sess.outcome === "running" || sess.outcome === "waiting");
+    // Only a session pays: a live wait has none to stop.
+    const live = isLive(run, ctx.rider) && ctx.rider.phases[run.phase].kind === "session";
     const paid = live ? ` — session ${sess.shortId ?? sess.id} is still ${sess.outcome} and still paying: ${ctx.binding.stopHint({ shortId: sess.shortId, sessionId: sess.id })}` : "";
     const why = because ?? "rider reset";
     run.transitions.push({ at: ctx.now().toISOString(), from: run.phase, label: "reset", to: "reset", because: why, by });

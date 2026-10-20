@@ -19,11 +19,15 @@ function requiresEntry(e) {
 /** Printed right above `decide with:`, so the judge reads which labels `next` would refuse before it copies one. */
 const requiresLine = (entries) => `── requires ── ${entries.map(requiresEntry).join(" · ")}`;
 
-/** What a dry run would do (§6.2): the launch argv, or at a gate the check it would wait on. */
+/** What a dry run would do (§6.2): the launch argv, or at a gate or a wait the check it would wait on. */
 function dryRunLine(r) {
   if (r.argv) return `[dry-run] ${r.phase} (${r.model}): ${r.argv.map((a) => (/\s/.test(a) ? JSON.stringify(a.length > 60 ? `${a.slice(0, 57)}…` : a) : a)).join(" ")}`;
-  return r.human ? `[dry-run] ${r.phase} (human): ${r.check}` : `[dry-run] ${r.phase ?? r.to}`;
+  return r.human || r.await ? `[dry-run] ${r.phase} (${r.human ? "human" : "await"}): ${r.check}` : `[dry-run] ${r.phase ?? r.to}`;
 }
+/** Entering a wait launches nothing (§7.5): the entry names the check the watcher polls, and the stretch it decides. */
+const awaitingLines = (r) => `${r.phase} awaiting: $ ${r.check} every ${r.pollSeconds} s${r.deadline ? ` until ${r.deadline}` : ""}\nvisit ${r.visit ?? "?"} of run ${r.runId} · stretch ${r.key}`;
+/** A wait's last poll as status prints it: before the first, there is no exit to name. */
+const waitLine = (w) => [`wait: $ ${w.check}`, `${w.polls} polls`, w.lastPollAt ? `last exit ${w.lastExit} at ${w.lastPollAt}` : "no poll yet", w.deadline ? `deadline ${w.deadline}` : null].filter(Boolean).join(" · ");
 /** `start`'s own lines (§6.2): above its result, the `locate` the operator's word overrode. A check result's `note` is
  *  the classification's, and its block prints it in place. */
 const startNote = (verb, r, text) => (verb === "start" && r.note ? `note: ${r.note}\n${text}` : text);
@@ -41,6 +45,8 @@ export function render(verb, r) {
   switch (r?.state) {
     case "none": return renderNone(r);
     case "human": return startNote(verb, r, renderHuman(r));
+    // Here, before any read of `r.session`: a wait has none, and a throw after the committed entry would print it as refused.
+    case "awaiting": return startNote(verb, r, awaitingLines(r));
     case "dry-run": return startNote(verb, r, r.entry ? `${dryRunLine(r)}\nentry: ${r.entry.phase} by ${r.entry.by}` : dryRunLine(r));
     case "operator": return [`run ${r.runId} stopped at operator: ${r.reason}`, `total cost: ${fmtCost(r.totalCost ?? 0)}`, "the operator directs what happens next:", ...operatorMoves(r.overrulable, r.runId, r.targetFlags)].join("\n");
     case "noted": return `noted (${r.notes} notes on ${r.ended ? "ended " : ""}run ${r.runId})`;
@@ -105,10 +111,15 @@ function renderStatus(r) {
   const L = [`${whose(r)} · phase ${r.phase} (visit ${r.visits[r.phase] ?? 1})${r.key ? ` · stretch ${r.key}` : ""} · ${branchText} · started ${r.startedAt}`];
   if (r.branchDrift) L.push(driftLine(r));
   L.push(`state: ${r.state}   watcher: ${r.watcher ? `alive (pid ${r.watcher})` : "none"}   last event: ${r.lastEvent ? eventLine(r.lastEvent) : "none"}`);
-  for (const s of r.sessions) L.push(`  ${s.phase.padEnd(8)} ${s.model.padEnd(7)} ${(s.shortId ?? "?").padEnd(9)} ${s.outcome.padEnd(13)} ${fmtCost(s.cost)}${s.turns != null ? `  ${s.turns} turns` : ""}${s.resumedFrom ? "  (resumed)" : ""}`);
+  // A wait has no model, session or cost (§7.4): its row says what it is, and its line below what it last saw.
+  for (const s of r.sessions) L.push(s.kind === "await" ? `  ${s.phase.padEnd(8)} ${"await".padEnd(7)} ${"-".padEnd(9)} ${s.outcome}` : `  ${s.phase.padEnd(8)} ${s.model.padEnd(7)} ${(s.shortId ?? "?").padEnd(9)} ${s.outcome.padEnd(13)} ${fmtCost(s.cost)}${s.turns != null ? `  ${s.turns} turns` : ""}${s.resumedFrom ? "  (resumed)" : ""}`);
+  if (r.wait) L.push(waitLine(r.wait));
+  if (r.wait?.failing) L.push(`check failing: ${r.wait.failures} in a row since ${r.wait.failingSince}`);
   L.push(`total cost: ${fmtCost(r.totalCost)}`);
   if (r.attach) L.push(`attach: ${r.attach}`);
-  L.push(`next: ${{ running: `arm rider await${f} (background) and stop`, waiting: `rider check${f}, relay the question, arm rider await${f}`, finished: `rider check${f}, then the command its decide-with line prints`, human: `rider check${f} (runs the phase's check command)` }[r.state]}`);
+  // A failing check is the operator's to fix: the watcher keeps polling it, and nothing the judge decides would help.
+  const awaiting = r.wait?.failing ? `relay the failing check to the operator, then arm rider await${f}` : `arm rider await${f} (background) and stop`;
+  L.push(`next: ${{ running: `arm rider await${f} (background) and stop`, awaiting, waiting: `rider check${f}, relay the question, arm rider await${f}`, finished: `rider check${f}, then the command its decide-with line prints`, human: `rider check${f} (runs the phase's check command)` }[r.state]}`);
   return L.join("\n");
 }
 

@@ -2,10 +2,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readdirSync, rmSync, writeFileSync } from "node:fs";
-import { chainCost, chainResumes, consecutiveRateLimitResumes, currentSession, keyOf, loadLocal, newRun, riderEnv, totalCost, writeLog } from "../scripts/lib/state.mjs";
+import { chainCost, chainResumes, consecutiveRateLimitResumes, currentSession, isLive, keyOf, loadLocal, newRun, riderEnv, totalCost, writeLog } from "../scripts/lib/state.mjs";
 import { readJson, riderPaths } from "../scripts/lib/store.mjs";
 import { FakeBinding } from "./fake-binding.mjs";
-import { makeCtx, tmpProject } from "./helpers.mjs";
+import { loadRider } from "../scripts/lib/rider-md.mjs";
+import { AWAIT_PROMPTS, AWAIT_RIDER_MD, makeCtx, tmpProject } from "./helpers.mjs";
 
 const now = new Date("2026-09-03T12:00:00Z");
 const R = (phase, id, { cost = null, resumedFrom = null, resumeReason = null, at = null } = {}) => ({ phase, id, cost, resumedFrom, resumeReason, at, outcome: "done" });
@@ -30,7 +31,7 @@ test("a run is created, saved, ended into runs/, and found again as the last end
     const log = writeLog(ctx.paths, "x.json", { a: 1 });
     assert.ok(existsSync(log));
     assert.deepEqual(readJson(log), { a: 1 });
-    assert.deepEqual(loadLocal(riderPaths(p.root, "lemmaria")), { maxWaitHours: 6, pollSeconds: 30, models: {}, advisor: null, launchArgs: [], claudePath: null, shell: null, permissionMode: "auto", staleDecisionMinutes: 20 });
+    assert.deepEqual(loadLocal(riderPaths(p.root, "lemmaria")), { maxWaitHours: 6, pollSeconds: 30, models: {}, advisor: null, launchArgs: [], claudePath: null, shell: null, permissionMode: "auto", staleDecisionMinutes: 20, awaitCheckFailures: 3 });
   } finally { p.cleanup(); }
 });
 
@@ -108,4 +109,23 @@ test("a record pays only for its own stretch; nudges are counted along the chain
   assert.equal(consecutiveRateLimitResumes([first, second, third, forked], "plan"), 0);
   assert.equal(consecutiveRateLimitResumes([R("build", "x")], "plan"), 0);
   assert.equal(totalCost({ sessions: [first, R("build", "x", { cost: 2.5 })] }), 12.5);
+});
+
+test("isLive by kind: a running or waiting session, an awaiting wait, never a gate", (t) => {
+  const p = tmpProject({ riderMd: AWAIT_RIDER_MD, prompts: AWAIT_PROMPTS });
+  t.after(p.cleanup);
+  const rider = loadRider(p.file);
+  const at = (phase, outcome, kind) => ({ phase, sessions: outcome ? [{ phase, outcome, ...(kind ? { kind } : {}) }] : [] });
+  const table = [
+    ["session running", at("review", "running"), true],
+    ["session waiting", at("review", "waiting"), true],
+    ["session done", at("review", "done"), false],
+    ["session not launched", at("review", null), false],
+    ["wait awaiting", at("wait", "awaiting", "await"), true],
+    ["wait ready", at("wait", "ready", "await"), false],
+    ["wait timed out", at("wait", "timed-out", "await"), false],
+    ["gate", at("merge", null), false],
+    ["no run", null, false],
+  ];
+  for (const [name, run, live] of table) assert.equal(isLive(run, rider), live, name);
 });

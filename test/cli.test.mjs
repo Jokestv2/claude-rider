@@ -6,7 +6,7 @@ import { existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isEntryPoint, parseCli } from "../scripts/rider.mjs";
-import { tmpProject } from "./helpers.mjs";
+import { AWAIT_PROMPTS, AWAIT_RIDER_MD, tmpProject } from "./helpers.mjs";
 
 const RIDER = fileURLToPath(new URL("../scripts/rider.mjs", import.meta.url));
 const FAKE = fileURLToPath(new URL("./fake-binding.mjs", import.meta.url));
@@ -131,4 +131,26 @@ test("every verb refuses state from an older executor, and leaves a guard agains
     }
     assert.equal(existsSync(join(q.root, ".rider", "lemmaria", "default")), false, "nothing was written beside it");
   } finally { q.cleanup(); }
+});
+
+test("an entry that lands on an await phase exits 0 and prints the awaiting line", (t) => {
+  const p = tmpProject({ riderMd: AWAIT_RIDER_MD, prompts: AWAIT_PROMPTS });
+  t.after(p.cleanup);
+  const state = join(p.root, "fake-state.json");
+  writeFileSync(state, JSON.stringify({ scripts: [] }));
+  const env = { ...process.env, RIDER_BINDING: FAKE, RIDER_FAKE_STATE: state, RIDER_NO_WATCHER: "1" };
+  const run = (...args) => { const r = spawnSync(process.execPath, [RIDER, ...args], { cwd: p.root, env, encoding: "utf8" }); return { code: r.status, out: r.stdout, err: r.stderr }; };
+  const r = run("start", "wait");
+  assert.deepEqual([r.code, r.err], [0, ""]);
+  const [first, second] = r.out.trimEnd().split("\n");
+  assert.match(first, /^wait awaiting: \$ test -f ready\.flag \|\| exit 75 every 60 s until \d{4}-\d\d-\d\dT[\d:.]+Z$/);
+  const runId = /^visit 1 of run ([0-9a-f]{4}) · stretch \1\.1$/.exec(second)?.[1];
+  assert.ok(runId, second);
+  const st = run("status");
+  assert.equal(st.code, 0);
+  assert.match(st.out, /^state: awaiting /m);
+  assert.match(st.out, /^wait: \$ test -f ready\.flag \|\| exit 75 · 0 polls · no poll yet · deadline /m);
+  const refused = run("next", "settled", "--on", `${runId}.1`);
+  assert.equal(refused.code, 2);
+  assert.match(refused.out, /^refused: wait is awaiting its check \(poll 0, last exit none\): only the operator ends a wait early/);
 });
