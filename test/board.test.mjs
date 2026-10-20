@@ -13,7 +13,7 @@ import { emptyState, endedRunPath, instancePaths, writeJsonAtomic, writeState } 
 import { start } from "../scripts/lib/verbs.mjs";
 import { resolveInstance } from "../scripts/rider.mjs";
 import { FakeBinding } from "./fake-binding.mjs";
-import { FakeClock, INSTANCE_RIDER_MD, TEST_RIDER_MD, makeCtx, tmpProject } from "./helpers.mjs";
+import { AWAIT_PROMPTS, AWAIT_RIDER_MD, FakeClock, INSTANCE_RIDER_MD, TEST_RIDER_MD, makeCtx, tmpProject } from "./helpers.mjs";
 
 const RIDER = fileURLToPath(new URL("../scripts/rider.mjs", import.meta.url));
 const NOW = new Date("2026-10-01T12:00:00Z");
@@ -405,4 +405,87 @@ test("one unreadable ended-run record is an error; the instance's row stands on 
   assert.deepEqual(board.rows.map((r) => [r.instance, r.category, r.instanceCost]), [["a", "idle", 0.25]]);
   assert.deepEqual(board.errors.map((e) => [e.rider, e.instance]), [["lemmaria", "a"]]);
   assert.ok(board.errors[0].error.includes(torn), board.errors[0].error);
+});
+
+/** The await rider (§7.1) with its instances under `nodes/`: `wait` polls `CHECK`, and its labels are its edges plus operator. */
+const AWAIT_INSTANCE_MD = AWAIT_RIDER_MD.replace("name: lemmaria\n", "name: lemmaria\ninstances: nodes/*\n");
+const CHECK = "test -f ready.flag || exit 75";
+const WAIT_LABELS = ["settled", "timed out", "operator"];
+/** A wait record as `enterWait` writes one, entered 90 minutes ago, with `extra` as later polls left it. */
+const waitRec = (extra = {}) => ({ kind: "await", phase: "wait", at: ago(90), check: CHECK, outcome: "awaiting", polls: 0, lastPollAt: null, lastExit: null, lastError: null, lastOutput: null, failures: 0, failingSince: null, failingEmitted: false, deadline: ago(-30), readyAt: null, timedOutAt: null, watcherSpawns: 1, ...extra });
+/** A run at the wait, reached from a decided plan stretch: the wait is the run's second stretch, so its key is 3f2a.2. */
+const atWait = (wait, extra = {}) => active([stretch("done", { phase: "plan", stoppedAt: ago(91) }), wait], {
+  phase: "wait", visits: { plan: 1, wait: 1 }, transitions: [{ at: ago(90), from: "plan", label: "planned", to: "wait", because: "the plan holds", by: "judge" }], ...extra,
+});
+const polled = { polls: 169, lastPollAt: ago(4), lastExit: 75, lastOutput: "2/3 jobs running" };
+const failing = { ...polled, lastExit: 127, lastOutput: "\nsh: tool: not found\nline 2", failures: 3, failingSince: ago(10), failingEmitted: true };
+/** Two errors in a row: below the default threshold, so the watcher has emitted no check-failing wake yet. */
+const streak2 = { ...failing, failures: 2, failingEmitted: false };
+const ready = { ...polled, polls: 170, lastExit: 0, lastOutput: "3/3 jobs settled", outcome: "ready", readyAt: ago(5) };
+const timedOut = { ...polled, outcome: "timed-out", timedOutAt: ago(6) };
+/** `categorize` at the wait, at the default threshold, with the watcher alive unless `live` says otherwise. */
+function waitRow(t, wait, { live = true, failThreshold = 3 } = {}) {
+  const p = tmpProject({ riderMd: AWAIT_INSTANCE_MD, prompts: AWAIT_PROMPTS });
+  t.after(p.cleanup);
+  const state = { ...emptyState({ rider: "lemmaria", instance: "x", scope: "nodes/x" }), run: atWait(waitRec(wait)) };
+  const c = categorize(state, loadRider(p.file), { now: NOW, staleMs: 20 * 60_000, watcherAlive: live, failThreshold });
+  return [c.category, c.waitsOn, c.since, c.key, c.labels];
+}
+
+test("an awaiting wait whose watcher is alive is running, dated from its entry, with no decision to make (§7.8)", (t) => {
+  assert.deepEqual(waitRow(t, polled), ["running", `awaiting ${CHECK} · poll 169, last exit 75 at ${ago(4)}`, ago(90), "3f2a.2", null]);
+  assert.deepEqual(waitRow(t, {}), ["running", `awaiting ${CHECK} · no poll yet`, ago(90), "3f2a.2", null]);
+  // Errors below the threshold are a wait the watcher still polls.
+  assert.deepEqual(waitRow(t, streak2).slice(0, 2), ["running", `awaiting ${CHECK} · poll 169, last exit 127 at ${ago(4)}`]);
+});
+
+test("an awaiting wait whose watcher is dead needs you, failing streak or not: nothing polls it", (t) => {
+  for (const w of [polled, {}, failing]) assert.deepEqual(waitRow(t, w, { live: false }), ["needs you", "watcher not alive", ago(90), "3f2a.2", null]);
+});
+
+test("an awaiting wait whose errors reached the threshold needs you, dated from the streak's first error", (t) => {
+  assert.deepEqual(waitRow(t, failing), ["needs you", `await check failing: exit 127, 3 in a row since ${ago(10)}: sh: tool: not found`, ago(10), "3f2a.2", null]);
+  assert.equal(waitRow(t, { ...failing, failures: 2 }, { failThreshold: 2 })[1], `await check failing: exit 127, 2 in a row since ${ago(10)}: sh: tool: not found`);
+});
+
+test("a check that timed out silently names the timeout, as the watcher's check-failing event does (R8)", (t) => {
+  const silent = { ...failing, lastExit: -1, lastOutput: "", lastError: "timed out after 300 s" };
+  assert.deepEqual(waitRow(t, silent).slice(0, 3), ["needs you", `await check failing: exit -1, 3 in a row since ${ago(10)}: timed out after 300 s`, ago(10)]);
+  assert.equal(waitRow(t, { ...silent, lastError: null })[1], `await check failing: exit -1, 3 in a row since ${ago(10)}: no output`);
+});
+
+test("a ready or timed-out wait younger than the stale line needs its judge, with the phase's edges and operator", (t) => {
+  assert.deepEqual(waitRow(t, ready), ["needs its judge", "its judge's decision on the ready wait", ago(5), "3f2a.2", WAIT_LABELS]);
+  assert.deepEqual(waitRow(t, timedOut), ["needs its judge", "its judge's decision on the timed-out wait", ago(6), "3f2a.2", WAIT_LABELS]);
+  // The watcher exits once the wait is over: a dead one calls for no one.
+  assert.equal(waitRow(t, ready, { live: false })[0], "needs its judge");
+  // A wait that timed out mid-streak is over, not failing (R7): the judge decides it like any other.
+  assert.deepEqual(waitRow(t, { ...failing, outcome: "timed-out", timedOutAt: ago(6) }).slice(0, 3), ["needs its judge", "its judge's decision on the timed-out wait", ago(6)]);
+});
+
+test("a ready or timed-out wait older than the stale line needs you: undecided, dated from its end", (t) => {
+  assert.deepEqual(waitRow(t, { ...ready, readyAt: ago(25) }), ["needs you", "undecided for 25 min — its judge has most likely died", ago(25), "3f2a.2", WAIT_LABELS]);
+  assert.deepEqual(waitRow(t, { ...timedOut, timedOutAt: ago(30) }), ["needs you", "undecided for 30 min — its judge has most likely died", ago(30), "3f2a.2", WAIT_LABELS]);
+});
+
+test("awaitCheckFailures in local.json moves the failing line; a decided wait's row carries its decide-with line", (t) => {
+  const p = tmpProject({ riderMd: AWAIT_INSTANCE_MD, prompts: AWAIT_PROMPTS, instances: ["two", "ready", "drift"] });
+  t.after(p.cleanup);
+  put(p.root, "two", { run: atWait(waitRec(streak2)), watcher: LIVE });
+  put(p.root, "ready", { run: atWait(waitRec(ready)) });
+  put(p.root, "drift", { run: atWait(waitRec(ready), { branchDrift: { branch: "elsewhere", at: ago(40) } }) });
+  const before = byInstance(collectBoard(p.root, { now: NOW, alive }));
+  assert.deepEqual([before.two.category, before.two.decideWith], ["running", null], "the default is 3");
+  writeFileSync(join(p.root, ".rider", "lemmaria", "local.json"), JSON.stringify({ awaitCheckFailures: 2 }));
+  const board = collectBoard(p.root, { now: NOW, alive });
+  const rows = byInstance(board);
+  assert.deepEqual([rows.two.category, rows.two.waitsOn, rows.two.since, rows.two.key, rows.two.decideWith], ["needs you", `await check failing: exit 127, 2 in a row since ${ago(10)}: sh: tool: not found`, ago(10), "3f2a.2", null]);
+  const decide = 'decide with:  rider next <label> --instance ready --on 3f2a.2 --because "…"     (labels: settled · timed out · operator)';
+  assert.deepEqual([rows.ready.category, rows.ready.phase, rows.ready.key, rows.ready.decideWith], ["needs its judge", "wait", "3f2a.2", decide]);
+  // Drift still annotates a wait's row, and keeps its decide-with line.
+  const left = `the shared working tree left main for elsewhere (first seen ${ago(40)}, as of the instance's last check)`;
+  assert.deepEqual([rows.drift.category, rows.drift.waitsOn, rows.drift.decideWith], ["needs you", `its judge's decision on the ready wait · ${left}`, decide.replace("--instance ready", "--instance drift")]);
+  const text = render("board", board);
+  assert.match(text, /lemmaria\/two [^\n]*phase wait · [^\n]*await check failing: exit 127/);
+  assert.ok(text.split("\n").some((l) => l.trim() === decide), "the decide-with line, unchanged");
 });

@@ -1,6 +1,7 @@
 // scripts/lib/board.mjs — every instance of every rider, needs-you first (§10). Reads only: no lock, no binding.
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
+import { failingOf, firstLine } from "./await.mjs";
 import { currentKey, decideWithLine, targetFlags } from "./keys.mjs";
 import { isAlive } from "./proc.mjs";
 import { discoverRiders, legalLabels, listInstances, loadRider, RESERVED_IDS, SAFE_ID } from "./rider-md.mjs";
@@ -20,10 +21,10 @@ export function hasState(root, rider, id) {
 const minutes = (ms) => Math.floor(ms / 60_000);
 const firstQuestion = (q) => q?.questions?.[0]?.question ?? "asked in prose";
 
-/** Which group an instance's row goes in, what it waits on and since when (§10). Pure: the clock, the stale line and
- *  the watcher's liveness come in, so a test can place a row in every group. Branch drift (§11.1) annotates the row
- *  rather than replacing it: the tree is shared, so one line would otherwise hide every instance's own question or
- *  undecided stretch. It still makes the row the operator's. */
+/** Which group an instance's row goes in, what it waits on and since when (§10). Pure: the clock, the stale line, the
+ *  watcher's liveness and `local.json`'s `awaitCheckFailures` (`failThreshold`) come in, so a test can place a row in
+ *  every group. Branch drift (§11.1) annotates the row rather than replacing it: the tree is shared, so one line would
+ *  otherwise hide every instance's own question or undecided stretch. It still makes the row the operator's. */
 export function categorize(state, rider, opts) {
   const c = ownCategory(state, rider, opts);
   const drift = state?.run?.branchDrift;
@@ -36,7 +37,7 @@ export function categorize(state, rider, opts) {
 
 /** The row as if the tree were on its base. The first rule that matches wins. `key` is the active run's latest
  *  stretch; `labels` come only with a stretch that waits on a decision. */
-function ownCategory(state, rider, { now, staleMs, watcherAlive: live }) {
+function ownCategory(state, rider, { now, staleMs, watcherAlive: live, failThreshold }) {
   const row = (category, waitsOn, since, key = null, labels = null) => ({ category, waitsOn, since: since ?? null, key, labels });
   const run = state?.run;
   if (!run) {
@@ -48,6 +49,16 @@ function ownCategory(state, rider, { now, staleMs, watcherAlive: live }) {
   const def = rider.phases[run.phase];
   // A run that started at the gate records no handoff (§6.2): it has waited on the operator since it started.
   if (def?.kind === "human") return row("needs you", `human check: ${def.check}`, run.handoff?.at ?? run.startedAt, key);
+  // A finished stretch with no decision yet: a live judge's await wakes within seconds of the end, so one older than
+  // the stale line has lost its judge (decision 9). `what` names it: a done or gone session, a ready or timed-out wait.
+  const finished = (end, what) => {
+    const labels = legalLabels(rider, run.phase).map((l) => l.label);
+    const age = now.getTime() - new Date(end).getTime();
+    if (age > staleMs) return row("needs you", `undecided for ${minutes(age)} min — its judge has most likely died`, end, key, labels);
+    return row("needs its judge", `its judge's decision on the ${what}`, end, key, labels);
+  };
+  // Asked of the phase kind first, as check and status ask it (§7.4): a wait's record is no session.
+  if (def?.kind === "await") return waitCategory(run, currentSession(run), { row, key, finished, live, failThreshold });
   const sess = currentSession(run);
   if (!sess) return row("needs you", `no session for phase ${run.phase}`, run.transitions.at(-1)?.at ?? run.startedAt, key);
   // Stopped at: a crash between classification and harvest leaves an outcome with no stop time (Review Focus 4).
@@ -62,14 +73,24 @@ function ownCategory(state, rider, { now, staleMs, watcherAlive: live }) {
     const at = sess.rateLimit?.at ?? stopped;
     return live ? row("running", `rate-limited; resumes after ${sess.rateLimit?.resetAt ?? "?"}`, at, key) : row("needs you", "rate-limited; the watcher gave up or died", at, key);
   }
-  if (sess.outcome === "done" || sess.outcome === "gone") {
-    const labels = legalLabels(rider, run.phase).map((l) => l.label);
-    const age = now.getTime() - new Date(stopped).getTime();
-    // A live judge's await wakes within seconds of the stop, so a stretch this old has lost its judge (decision 9).
-    if (age > staleMs) return row("needs you", `undecided for ${minutes(age)} min — its judge has most likely died`, stopped, key, labels);
-    return row("needs its judge", `its judge's decision on the ${sess.outcome} stretch`, stopped, key, labels);
-  }
+  if (sess.outcome === "done" || sess.outcome === "gone") return finished(stopped, `${sess.outcome} stretch`);
   return row("needs you", `stretch outcome ${sess.outcome}`, stopped, key);
+}
+
+/** An await phase's row (§7.8), from the watcher's last stored poll: the board runs no check. An awaiting wait is
+ *  running only while a watcher polls it, and a dead one comes first, since then nothing polls even a failing check. A
+ *  failing check is the operator's to fix, and reads as the watcher's `check-failing` event does (R8). A ready or
+ *  timed-out wait is decided like a finished session, dated from its end; its watcher has exited on purpose. */
+function waitCategory(run, wait, { row, key, finished, live, failThreshold }) {
+  if (wait?.kind !== "await") return row("needs you", `no wait record for await phase ${run.phase}`, run.transitions.at(-1)?.at ?? run.startedAt, key);
+  if (wait.outcome === "awaiting") {
+    if (!live) return row("needs you", "watcher not alive", wait.at, key);
+    if (failingOf(wait, failThreshold)) return row("needs you", `await check failing: exit ${wait.lastExit}, ${wait.failures} in a row since ${wait.failingSince}: ${firstLine(wait.lastOutput) || wait.lastError || "no output"}`, wait.failingSince, key);
+    return row("running", `awaiting ${wait.check} · ${wait.lastPollAt ? `poll ${wait.polls}, last exit ${wait.lastExit} at ${wait.lastPollAt}` : "no poll yet"}`, wait.at, key);
+  }
+  // A wait is ready or timed out in the write that dates it; `at` only keeps a hand-edited record from aging as NaN.
+  if (wait.outcome === "ready" || wait.outcome === "timed-out") return finished(wait.readyAt ?? wait.timedOutAt ?? wait.at, `${wait.outcome} wait`);
+  return row("needs you", `wait outcome ${wait.outcome}`, wait.at, key);
 }
 
 /** The ended runs on file, oldest first. Each file is read on its own: one that does not parse goes to `onError` and
@@ -84,12 +105,12 @@ function endedRuns(paths, onError) {
 const sameRun = (a, b) => !!a && !!b && a.runId === b.runId && a.startedAt === b.startedAt;
 
 /** One instance's row. `orphaned` overrides the group and what it waits on, and keeps the run's phase and key. */
-function rowOf(root, rider, { id, scope, orphaned, declared, multiRider, now, staleMs, alive, errors }) {
+function rowOf(root, rider, { id, scope, orphaned, declared, multiRider, now, staleMs, failThreshold, alive, errors }) {
   const paths = instancePaths(root, rider.name, id);
   const state = readState(paths) ?? emptyState({ rider: rider.name, instance: id, scope });
   const { run, lastRun } = state;
   const watcher = watcherAlive(paths, alive);
-  const c = categorize(state, rider, { now, staleMs, watcherAlive: !!watcher });
+  const c = categorize(state, rider, { now, staleMs, watcherAlive: !!watcher, failThreshold });
   // A crash inside an end or a revival leaves the active run in runs/ too (§6.3): state.json is the truth.
   const past = endedRuns(paths, (e) => errors.push({ rider: rider.name, instance: id, error: e.message })).filter((r) => !sameRun(r, run));
   // lastRun keeps no transitions: with no active run, the latest decision is in the ended run's record.
@@ -129,18 +150,20 @@ export function collectBoard(root, { now = new Date(), alive = isAlive } = {}) {
   const multiRider = riders.length > 1;
   const rows = [], skipped = [], errors = [];
   for (const found of riders) {
-    let rider, listed, staleMs;
+    let rider, listed, staleMs, failThreshold;
     try {
       rider = loadRider(found.file);
       const rp = riderPaths(root, rider.name);
       const v3 = v3Refusal(rp);
       if (v3) { errors.push({ rider: rider.name, error: v3 }); continue; }
-      staleMs = loadLocal(rp).staleDecisionMinutes * 60_000;
+      const local = loadLocal(rp);
+      staleMs = local.staleDecisionMinutes * 60_000;
+      failThreshold = local.awaitCheckFailures;
       listed = listInstances(root, rider);
     } catch (e) { errors.push({ rider: found.name, error: e.message }); continue; }
     skipped.push(...listed.skipped.map((s) => ({ rider: rider.name, ...s })));
     const one = (id, scope, orphaned) => {
-      try { rows.push(rowOf(root, rider, { id, scope, orphaned, declared: listed.declared, multiRider, now, staleMs, alive, errors })); } catch (e) { errors.push({ rider: rider.name, instance: id, error: e.message }); }
+      try { rows.push(rowOf(root, rider, { id, scope, orphaned, declared: listed.declared, multiRider, now, staleMs, failThreshold, alive, errors })); } catch (e) { errors.push({ rider: rider.name, instance: id, error: e.message }); }
     };
     for (const i of listed.instances) one(i.id, i.scope, false);
     // Listing .rider/<rider>/ is the one read only the orphans need: when it fails, the instances above still stand.
