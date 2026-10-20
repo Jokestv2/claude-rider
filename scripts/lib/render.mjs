@@ -28,6 +28,12 @@ function dryRunLine(r) {
 const awaitingLines = (r) => `${r.phase} awaiting: $ ${r.check} every ${r.pollSeconds} s${r.deadline ? ` until ${r.deadline}` : ""}\nvisit ${r.visit ?? "?"} of run ${r.runId} · stretch ${r.key}`;
 /** A wait's last poll as status prints it: before the first, there is no exit to name. */
 const waitLine = (w) => [`wait: $ ${w.check}`, `${w.polls} polls`, w.lastPollAt ? `last exit ${w.lastExit} at ${w.lastPollAt}` : "no poll yet", w.deadline ? `deadline ${w.deadline}` : null].filter(Boolean).join(" · ");
+/** An awaiting wait at the failure threshold (`failingOf`), as status and the await block both say it. */
+const failingLine = (w) => `check failing: ${w.failures} in a row since ${w.failingSince}`;
+/** A command's output under its header, two spaces in, as the blocks print every read. */
+const indented = (text) => (text ? String(text).split("\n").map((l) => `  ${l}`) : []);
+/** The evidence section, as a session's block and a decided wait's both print it: empty when the rider declares none. */
+const evidenceLines = (evidence) => (evidence?.length ? [RULE("evidence"), ...evidence.flatMap((e) => [`  $ ${e.cmd}${e.status !== 0 ? `   (exit ${e.status})` : ""}`, ...(e.output || "").split("\n").filter(Boolean).map((l) => `  ${l}`)])] : []);
 /** `start`'s own lines (§6.2): above its result, the `locate` the operator's word overrode. A check result's `note` is
  *  the classification's, and its block prints it in place. */
 const startNote = (verb, r, text) => (verb === "start" && r.note ? `note: ${r.note}\n${text}` : text);
@@ -42,6 +48,8 @@ export function render(verb, r) {
   if (r?.ok === false && r.error) return r.stale && r.current ? `refused: ${r.error}\nnow: ${nowLine(r.current)}` : `refused: ${r.error}`;
   if (verb === "status") return renderStatus(r); // before the state switch: status has its own none/human shapes
   if (verb === "board") return renderBoard(r);
+  // Before the state switch: `check` at a wait returns state `awaiting` too, and its block is not the entry's line.
+  if (r?.kind === "await") return renderAwait(r);
   switch (r?.state) {
     case "none": return renderNone(r);
     case "human": return startNote(verb, r, renderHuman(r));
@@ -114,7 +122,7 @@ function renderStatus(r) {
   // A wait has no model, session or cost (§7.4): its row says what it is, and its line below what it last saw.
   for (const s of r.sessions) L.push(s.kind === "await" ? `  ${s.phase.padEnd(8)} ${"await".padEnd(7)} ${"-".padEnd(9)} ${s.outcome}` : `  ${s.phase.padEnd(8)} ${s.model.padEnd(7)} ${(s.shortId ?? "?").padEnd(9)} ${s.outcome.padEnd(13)} ${fmtCost(s.cost)}${s.turns != null ? `  ${s.turns} turns` : ""}${s.resumedFrom ? "  (resumed)" : ""}`);
   if (r.wait) L.push(waitLine(r.wait));
-  if (r.wait?.failing) L.push(`check failing: ${r.wait.failures} in a row since ${r.wait.failingSince}`);
+  if (r.wait?.failing) L.push(failingLine(r.wait));
   L.push(`total cost: ${fmtCost(r.totalCost)}`);
   if (r.attach) L.push(`attach: ${r.attach}`);
   // A failing check is the operator's to fix: the watcher keeps polling it, and nothing the judge decides would help.
@@ -185,14 +193,29 @@ export function renderCheck(r) {
   L.push(`${RULE("final message")} (capped at 8 KB${r.log ? `; full text in ${r.log}` : ""})`);
   for (const l of formatFinal(r.finalText, 8 * 1024).split("\n")) L.push(`  ${l}`);
   if (r.question) L.push(RULE("question"), ...formatQuestion(r.question));
-  if (r.evidence?.length) {
-    L.push(RULE("evidence"));
-    for (const e of r.evidence) {
-      L.push(`  $ ${e.cmd}${e.status !== 0 ? `   (exit ${e.status})` : ""}`);
-      for (const l of (e.output || "").split("\n").filter(Boolean)) L.push(`  ${l}`);
-    }
-  }
+  L.push(...evidenceLines(r.evidence));
   L.push(`── legal labels: ${r.labels.map(labelText).join(" · ")}`);
+  if (r.requires) L.push(requiresLine(r.requires));
+  if (r.decideWith) L.push(r.decideWith);
+  return L.join("\n");
+}
+
+/** `check` at an await phase (§7.7): the watcher's last stored poll, never a fresh one. While the wait awaits, that is all
+ *  there is; ready or timed out, the judge reads the show, the evidence and the requires before it copies `decide with:`. */
+function renderAwait(r) {
+  const w = r.wait;
+  const L = [`${whose(r)} · phase ${r.phase} · visit ${r.visit} · awaiting since ${w.at} (${fmtDuration(r.elapsedMs)}) · ${w.polls} polls`, `state: ${r.state}`];
+  if (r.branchDrift) L.push(driftLine(r));
+  // Before the first poll there is no exit to name; an error the exit cannot say (a timeout, a spawn failure) follows it.
+  const polled = w.lastPollAt ? `exit ${w.lastExit}${w.lastError ? `: ${w.lastError}` : ""}, polled ${w.lastPollAt}` : "no poll yet";
+  L.push(`── check ── $ ${w.check}   (${polled})`, ...indented(r.checkOutput));
+  if (r.state === "awaiting") {
+    if (w.failing) L.push(failingLine(w));
+    if (w.deadline) L.push(`deadline: ${w.deadline}`);
+    return L.join("\n");
+  }
+  if (r.showCmd) L.push(`── show ── $ ${r.showCmd}`, ...indented(r.show));
+  L.push(...evidenceLines(r.evidence));
   if (r.requires) L.push(requiresLine(r.requires));
   if (r.decideWith) L.push(r.decideWith);
   return L.join("\n");

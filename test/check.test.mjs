@@ -5,10 +5,11 @@ import { existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { RESUME_NUDGE } from "../scripts/bindings/claude-code.mjs";
 import { check } from "../scripts/lib/check.mjs";
-import { renderCheck } from "../scripts/lib/render.mjs";
-import { next, resume, start } from "../scripts/lib/verbs.mjs";
+import { failingOf } from "../scripts/lib/await.mjs";
+import { render, renderCheck } from "../scripts/lib/render.mjs";
+import { next, resume, start, status } from "../scripts/lib/verbs.mjs";
 import { FakeBinding } from "./fake-binding.mjs";
-import { FakeClock, REQUIRES_RIDER_MD, TEST_RIDER_MD, makeCtx, requiring, save, settled, tmpProject } from "./helpers.mjs";
+import { AWAIT_PROMPTS, AWAIT_RIDER_MD, FakeClock, REQUIRES_RIDER_MD, TEST_RIDER_MD, makeCtx, requiring, save, settled, tmpProject } from "./helpers.mjs";
 
 const GREEN = "Plan is committed.\nSTATUS: planned\n<promise>MILESTONE PLANNED</promise>";
 function setup(script, extra = {}) {
@@ -465,4 +466,100 @@ test("a requires that hangs reads timed out in the readout", (t) => {
   // The cap is lowered for the test only; `sleep 3` keeps the orphan a timed-out shell leaves short.
   const { ctx } = planOn(t, requiring("build", ["sleep 3"]), { local: { requiresTimeoutMs: 300 } });
   assert.deepEqual(check(ctx).requires, [{ label: "planned", to: "build", ok: false, cmd: "sleep 3", status: -1, firstLine: "", timedOut: true }]);
+});
+
+/** A run entered at the await fixture's wait (or `md`'s). The watcher's spawns and the await checks are counted: `check`
+ *  must never run the check (§7.3), so `n.checks` stays 0. `alive` is what `watcherAlive` answers. */
+function waitOn(t, { md = AWAIT_RIDER_MD, alive = null, local = {} } = {}) {
+  const p = tmpProject({ riderMd: md, prompts: AWAIT_PROMPTS });
+  t.after(p.cleanup);
+  const n = { spawns: 0, checks: 0 };
+  const ctx = makeCtx({ root: p.root, binding: new FakeBinding(), local, watcherAlive: () => alive, spawnWatcher: () => { n.spawns++; return true; }, runCheck: () => { n.checks++; return { status: 0, timedOut: false, output: "", error: null }; } });
+  const { key } = start(ctx, { phase: "wait" });
+  return { ctx, n, key, flag: (name) => join(p.root, name) };
+}
+/** What the watcher's polls would have stored (Task 9 polls; these tests set it by hand). */
+function stored(ctx, fields) {
+  const run = ctx.loadRun();
+  Object.assign(run.sessions.at(-1), fields);
+  save(ctx, run);
+}
+const READY = { outcome: "ready", polls: 3, lastPollAt: "2026-09-03T12:02:00.000Z", lastExit: 0, lastOutput: "3/3 jobs settled", readyAt: "2026-09-03T12:02:00.000Z" };
+
+test("rider check never runs an await phase's check", (t) => {
+  // Nor anything else while it awaits: a show, the evidence and an edge target's requires would all leave a flag (§7.5).
+  const md = requiring("review", ["touch required.flag"], AWAIT_RIDER_MD.replace("check: test -f ready.flag || exit 75", "check: touch ran.flag; exit 75").replace("show: echo SHOW-WAIT", "show: touch shown.flag"));
+  const { ctx, n, key, flag } = waitOn(t, { md });
+  const r = check(ctx);
+  assert.deepEqual([r.state, r.kind, r.key, r.phase, r.visit], ["awaiting", "await", key, "wait", 1]);
+  assert.equal(existsSync(flag("ran.flag")), false);
+  assert.equal(n.checks, 0, "nor through the runner: the watcher alone polls (§7.3)");
+  assert.deepEqual([r.show, r.evidence, r.decideWith, "requires" in r], [null, [], null, false]);
+  assert.deepEqual([existsSync(flag("shown.flag")), existsSync(flag("required.flag"))], [false, false]);
+  assert.deepEqual(r.wait, status(ctx).wait, "the wait as status reads it");
+  assert.match(render("check", r).split("\n")[0], new RegExp(`^rider lemmaria/default/${r.runId} · phase wait · visit 1 · awaiting since 2026-09-03T12:00:00\\.000Z \\(0m\\) · 0 polls$`));
+});
+
+test("a ready block carries show, evidence and the decide-with line", (t) => {
+  const { ctx, n, key } = waitOn(t);
+  stored(ctx, READY);
+  const r = check(ctx);
+  assert.deepEqual([r.state, r.kind, r.key, r.checkOutput, r.showCmd], ["ready", "await", key, "3/3 jobs settled", "echo SHOW-WAIT"]);
+  assert.equal(r.show, "SHOW-WAIT");
+  assert.deepEqual(r.evidence.map((e) => [e.cmd, e.status, e.output]), [["echo evidence-ok", 0, "evidence-ok"]]);
+  assert.deepEqual(r.labels.map((l) => l.label), ["settled", "timed out", "operator"]);
+  assert.ok(r.decideWith.endsWith(`--on ${key} --because "…"     (labels: settled · timed out · operator)`), r.decideWith);
+  assert.deepEqual([r.wait.readyAt, r.elapsedMs, n.checks], [READY.readyAt, 2 * 60_000, 0]);
+  assert.match(render("check", r), /\ndecide with: {2}rider next <label> --on [0-9a-f]{4}\.1 /);
+  // A timed-out wait is decided the same way: the deadline is no verdict on anyone's work (§7.2).
+  stored(ctx, { outcome: "timed-out", readyAt: null, timedOutAt: "2026-09-03T14:00:00.000Z", lastExit: 75 });
+  const late = check(ctx);
+  assert.deepEqual([late.state, late.show, late.evidence.length, late.elapsedMs], ["timed-out", "SHOW-WAIT", 1, 2 * 3_600_000]);
+  assert.ok(late.decideWith.endsWith("(labels: settled · timed out · operator)"), late.decideWith);
+});
+
+test("an awaiting check respawns a dead watcher and counts it on the wait", (t) => {
+  const { ctx, n } = waitOn(t);
+  assert.deepEqual([n.spawns, ctx.loadRun().sessions[0].watcherSpawns], [1, 1], "start's");
+  check(ctx);
+  assert.deepEqual([n.spawns, ctx.loadRun().sessions[0].watcherSpawns], [2, 2]);
+  // Every check that finds none alive: a wait has no session that a registry could stop listing.
+  assert.equal(check(ctx).state, "awaiting");
+  assert.deepEqual([n.spawns, ctx.loadRun().sessions[0].watcherSpawns], [3, 3]);
+  // A live watcher is left alone, and a decided wait has nothing left to watch.
+  check(makeCtx({ root: ctx.root, binding: ctx.binding, watcherAlive: () => 4242, spawnWatcher: () => { n.spawns++; return true; } }));
+  stored(ctx, READY);
+  check(ctx);
+  assert.deepEqual([n.spawns, ctx.loadRun().sessions[0].watcherSpawns], [3, 3]);
+});
+
+test("a decided wait's block marks a label whose target's requires fails", (t) => {
+  const { ctx, flag } = waitOn(t, { md: requiring("review", ["test -f ok.flag"], AWAIT_RIDER_MD) });
+  stored(ctx, READY);
+  const r = check(ctx);
+  // `timed out` leads to operator, which is no phase and has no requires.
+  assert.deepEqual(r.requires, [{ label: "settled", to: "review", ok: false, cmd: "test -f ok.flag", status: 1, firstLine: "" }]);
+  assert.ok(r.decideWith.endsWith("(labels: settled ✗ · timed out · operator)"), r.decideWith);
+  writeFileSync(flag("ok.flag"), "");
+  assert.ok(check(ctx).decideWith.endsWith("(labels: settled · timed out · operator)"));
+});
+
+test("an awaiting wait at the failure threshold reads failing; a decided one never does", (t) => {
+  const { ctx } = waitOn(t, { local: { awaitCheckFailures: 2 } });
+  stored(ctx, { polls: 2, lastExit: 127, lastOutput: "sh: tool: not found", failures: 2, failingSince: "2026-09-03T12:01:00.000Z" });
+  const r = check(ctx);
+  assert.deepEqual([r.state, r.wait.failing, r.wait.failures, r.wait.failingSince], ["awaiting", true, 2, "2026-09-03T12:01:00.000Z"]);
+  assert.equal(r.wait.failing, status(ctx).wait.failing);
+  stored(ctx, { outcome: "timed-out", timedOutAt: "2026-09-03T14:00:00.000Z" });
+  assert.deepEqual([check(ctx).state, check(ctx).wait.failing], ["timed-out", false]);
+  // The one predicate (R7), as pollAwait, status and the board read it.
+  assert.deepEqual([failingOf({ outcome: "awaiting", failures: 3 }, 3), failingOf({ outcome: "awaiting", failures: 2 }, 3), failingOf({ outcome: "ready", failures: 3 }, 3), failingOf({ outcome: "timed-out", failures: 9 }, 3)], [true, false, false, false]);
+});
+
+test("an await phase with no wait record reads as none, with the reason", (t) => {
+  const { ctx } = waitOn(t);
+  const run = ctx.loadRun();
+  run.sessions = [];
+  save(ctx, run);
+  assert.deepEqual(check(ctx), { state: "none", error: `run ${run.runId} has no wait record for await phase wait` });
 });

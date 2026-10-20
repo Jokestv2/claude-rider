@@ -209,3 +209,97 @@ test("status at a wait: an await row, the wait line, and the hint to arm await o
   assert.match(ready, /^next: rider check --instance a, then the command its decide-with line prints$/m);
   assert.doesNotMatch(ready, /check failing/);
 });
+
+// A check at an await phase (§7.7): the stored poll, and once decided, what the judge reads before it picks a label.
+const waitRead = { check: "tool jobs tick --current", at: "2026-10-21T01:12:00.000Z", polls: 169, lastPollAt: "2026-10-21T15:15:00.000Z", lastExit: 75, lastError: null, failures: 0, failing: false, failingSince: null, deadline: "2026-10-24T01:12:00.000Z", readyAt: null, timedOutAt: null };
+const awaitBlock = {
+  state: "awaiting", kind: "await", rider: "lemmaria", instance: "a", runId: "3f2a", key: "3f2a.5", phase: "await-jobs", visit: 2,
+  wait: waitRead, elapsedMs: (14 * 60 + 3) * 60_000, checkOutput: "2/3 jobs running", show: null, showCmd: "tool jobs status --current", evidence: [],
+  labels: [{ label: "settled", to: "review" }, { label: "jobs failed", to: "implement" }, { label: "timed out", to: "operator" }, { label: "operator", to: "operator" }],
+  decideWith: null, baseBranch: "main", branchDrift: null,
+};
+const AWAIT_HEAD = "rider lemmaria/a/3f2a · phase await-jobs · visit 2 · awaiting since 2026-10-21T01:12:00.000Z (14h 3m) · 169 polls";
+
+test("an awaiting block is the stored poll, with no decide-with line", () => {
+  assert.deepEqual(render("check", awaitBlock).split("\n"), [
+    AWAIT_HEAD,
+    "state: awaiting",
+    "── check ── $ tool jobs tick --current   (exit 75, polled 2026-10-21T15:15:00.000Z)",
+    "  2/3 jobs running",
+    "deadline: 2026-10-24T01:12:00.000Z",
+  ]);
+  // Not the line an entry prints: a check result names its kind, an entry's does not.
+  assert.doesNotMatch(render("check", awaitBlock), /awaiting: \$/);
+  // Before the first poll there is no exit to name; with no deadline, no deadline line.
+  const fresh = { ...awaitBlock, elapsedMs: 0, checkOutput: "", wait: { ...waitRead, polls: 0, lastPollAt: null, lastExit: null, deadline: null } };
+  assert.deepEqual(render("check", fresh).split("\n"), [
+    "rider lemmaria/a/3f2a · phase await-jobs · visit 2 · awaiting since 2026-10-21T01:12:00.000Z (0m) · 0 polls",
+    "state: awaiting",
+    "── check ── $ tool jobs tick --current   (no poll yet)",
+  ]);
+});
+
+test("a failing check says so in the awaiting block, its error after the exit", () => {
+  const failing = { ...awaitBlock, checkOutput: "sh: tool: not found", wait: { ...waitRead, lastExit: 127, failures: 3, failing: true, failingSince: "2026-10-21T15:05:00.000Z" } };
+  assert.deepEqual(render("check", failing).split("\n").slice(2), [
+    "── check ── $ tool jobs tick --current   (exit 127, polled 2026-10-21T15:15:00.000Z)",
+    "  sh: tool: not found",
+    "check failing: 3 in a row since 2026-10-21T15:05:00.000Z",
+    "deadline: 2026-10-24T01:12:00.000Z",
+  ]);
+  // The line is status's: one predicate, one text.
+  assert.ok(render("status", { rider: "lemmaria", instance: "a", runId: "3f2a", phase: "await-jobs", visits: {}, startedAt: waitRead.at, state: "awaiting", watcher: null, sessions: [], totalCost: 0, wait: failing.wait }).includes("\ncheck failing: 3 in a row since 2026-10-21T15:05:00.000Z\n"));
+  const timedOut = { ...awaitBlock, checkOutput: "", wait: { ...waitRead, lastExit: -1, lastError: "timed out after 300 s" } };
+  assert.equal(render("check", timedOut).split("\n")[2], "── check ── $ tool jobs tick --current   (exit -1: timed out after 300 s, polled 2026-10-21T15:15:00.000Z)");
+});
+
+test("a ready block prints the check, show, evidence, requires and decide with, in §7.7's order", () => {
+  const decideWith = decideWithLine({ rider: "lemmaria", multiRider: false, instance: "a", declared: true, key: "3f2a.5", labels: awaitBlock.labels.map((l) => l.label) });
+  const ready = {
+    ...awaitBlock, state: "ready", checkOutput: "3/3 jobs settled: 2 succeeded, 1 failed (job 2: out of memory at step 1840)",
+    wait: { ...waitRead, lastExit: 0, readyAt: "2026-10-21T15:15:00.000Z" },
+    branchDrift: { branch: "elsewhere", at: "2026-10-21T09:00:00.000Z" },
+    show: "job 1 succeeded\njob 2 failed", evidence: done.evidence,
+    requires: [{ label: "settled", to: "review", ok: true, cmd: null, status: null, firstLine: null }, { label: "jobs failed", to: "implement", ok: true, cmd: null, status: null, firstLine: null }],
+    decideWith,
+  };
+  assert.deepEqual(render("check", ready).replace(/^── evidence ─+$/m, "── evidence ──").split("\n"), [
+    AWAIT_HEAD,
+    "state: ready",
+    "drift: the shared working tree left main for elsewhere (first seen 2026-10-21T09:00:00.000Z) — the executor does not switch back",
+    "── check ── $ tool jobs tick --current   (exit 0, polled 2026-10-21T15:15:00.000Z)",
+    "  3/3 jobs settled: 2 succeeded, 1 failed (job 2: out of memory at step 1840)",
+    "── show ── $ tool jobs status --current",
+    "  job 1 succeeded",
+    "  job 2 failed",
+    "── evidence ──",
+    "  $ git status --porcelain",
+    "  $ git log --oneline main..HEAD",
+    "  a1b2c3d feat(review): x",
+    "── requires ── settled → review ✓ · jobs failed → implement ✓",
+    'decide with:  rider next <label> --instance a --on 3f2a.5 --because "…"     (labels: settled · jobs failed · timed out · operator)',
+  ]);
+  // The evidence section is renderCheck's, line for line.
+  const evidence = (out) => out.split("\n").filter((l) => /^── evidence|^ {2}\$ |^ {2}a1b2c3d/.test(l));
+  assert.deepEqual(evidence(render("check", ready)), evidence(renderCheck(done)));
+  // A timed-out wait reads the same; a phase with no show prints no show section, and the deadline line is the awaiting block's alone.
+  const late = render("check", { ...ready, state: "timed-out", showCmd: null, show: null, wait: { ...ready.wait, readyAt: null, timedOutAt: "2026-10-24T01:12:00.000Z" } });
+  assert.match(late, /^state: timed-out$/m);
+  assert.doesNotMatch(late, /── show ──|^deadline:/m);
+  assert.equal(late.split("\n").at(-1), decideWith);
+});
+
+test("a stored output of 2 KB, of binary bytes, or empty renders without a throw", () => {
+  const big = "x".repeat(2047) + "\n";
+  const binary = Buffer.from([0x00, 0xff, 0xfe, 0x1b, 0x5b, 0x32, 0x4a, 0x0a, 0x80, 0x0d, 0x07, 0xc3]).toString("utf8");
+  for (const [what, checkOutput] of [["2 KB", big], ["binary", binary], ["empty", ""], ["never polled", null]]) {
+    for (const state of ["awaiting", "ready"]) {
+      let out;
+      assert.doesNotThrow(() => { out = render("check", { ...awaitBlock, state, checkOutput }); }, `${what} at ${state}`);
+      assert.equal(out.split("\n")[0], AWAIT_HEAD, `${what} at ${state}`);
+    }
+  }
+  assert.ok(render("check", { ...awaitBlock, checkOutput: big }).includes(`\n  ${"x".repeat(2047)}\n`));
+  // Nothing stored, nothing printed: the check line is followed by the deadline.
+  assert.equal(render("check", { ...awaitBlock, checkOutput: "" }).split("\n")[3], "deadline: 2026-10-24T01:12:00.000Z");
+});

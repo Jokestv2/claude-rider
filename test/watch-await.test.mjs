@@ -241,3 +241,16 @@ test("await's heartbeat is 360 minutes at an await phase", (t) => {
   const sJudge = makeCtx({ root: s.p.root, binding: s.binding, clock: s.clock, watcherAlive: () => 4242 });
   assert.deepEqual(awaitEvent(sJudge, { pollMs: 600_000 }), { ok: false, state: "timeout", minutes: 60 });
 });
+
+test("a check that finds the run entered a wait goes back round to poll it", (t) => {
+  // The watcher's stored read saw a session phase, and a decision entered the wait before `check` took the lock: `check`
+  // then reports the wait (§7.5), which is the watcher's to poll, never an event to emit.
+  const w = project(t, { answers: [0] });
+  const { key } = start(w.ctx, { phase: "wait" });
+  const loadRun = w.ctx.loadRun;
+  let reads = 0;
+  w.ctx.loadRun = () => { const run = loadRun(); return ++reads === 1 ? { ...run, phase: "plan" } : run; };
+  assert.deepEqual(watchLoop(w.ctx, w.opts), { ok: true, state: "ready", key, phase: "wait" });
+  assert.deepEqual(w.ctx.readEvents().map((e) => e.kind), ["run-started", "phase-entered", "ready"]);
+  assert.ok(w.logs.includes("the run moved on; watching its current stretch"), w.logs.join("\n"));
+});

@@ -1,5 +1,6 @@
 // scripts/lib/verbs.mjs
 import { readFileSync } from "node:fs";
+import { waitReadout } from "./await.mjs";
 import { RUN, driftOf, readouts } from "./check.mjs";
 import { currentKey, nowLine, parseRunKey, parseStretchKey, snapshot, targetFlags } from "./keys.mjs";
 import { edgePreflight, startPreflight } from "./preflight.mjs";
@@ -311,7 +312,7 @@ export function status(ctx) {
   const state = def.kind === "human" ? "human" : !sess ? "none" : wait ? (wait.outcome === "awaiting" ? "awaiting" : "finished") : sess.outcome === "running" || (awaitsReset(sess) && watcher) ? "running" : sess.outcome === "waiting" ? "waiting" : "finished";
   return {
     ok: true, state, rider: run.rider, ...where, runId: run.runId, key: currentKey(run), phase: run.phase, visits: run.visits, baseBranch: run.baseBranch ?? null, workBranch: run.workBranch ?? null, workTip: run.workTip ?? null, branchDrift: run.branchDrift ?? null, startedAt: run.startedAt, watcher, lastEvent,
-    ...(wait ? { outcome: wait.outcome, wait: waitReadout(ctx, wait) } : {}),
+    ...(wait ? { outcome: wait.outcome, wait: waitReadout(wait, ctx.local.awaitCheckFailures) } : {}),
     totalCost: totalCost(run),
     // Session records keep no kind (§7.4); a row names its own, so a reader never has to infer it.
     sessions: run.sessions.map((s) => ({ key: keyOf(run, s), kind: s.kind ?? "session", phase: s.phase, model: s.model, shortId: s.shortId, id: s.id, outcome: s.outcome, cost: s.cost ?? null, turns: s.turns ?? null, at: s.at, resumedFrom: s.resumedFrom ?? null })),
@@ -320,11 +321,6 @@ export function status(ctx) {
     lastRun,
   };
 }
-
-/** What status shows of a wait: the stored poll, never a new one. A failing check is no state of its own: an awaiting
- *  wait whose errors in a row reached `local.json`'s threshold (§7.5, §7.8). A wait that timed out mid-streak keeps its
- *  count, but is finished: the judge decides it like any other. */
-const waitReadout = (ctx, w) => ({ check: w.check, at: w.at, polls: w.polls, lastPollAt: w.lastPollAt, lastExit: w.lastExit, lastError: w.lastError, failures: w.failures, failing: w.outcome === "awaiting" && w.failures >= ctx.local.awaitCheckFailures, failingSince: w.failingSince, deadline: w.deadline, readyAt: w.readyAt, timedOutAt: w.timedOutAt });
 
 /** A note lands on the active run, or on the last ended one: what the operator found at the gate is
  *  usually said after the merge, and the merge is what ended the run. */

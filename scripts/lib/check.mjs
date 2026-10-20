@@ -1,4 +1,5 @@
 // scripts/lib/check.mjs
+import { awaitResult } from "./await.mjs";
 import { decideWithLine } from "./keys.mjs";
 import { signedOff, statusHint, waitingIsDone } from "./markers.mjs";
 import { edgePreflight, firstLine } from "./preflight.mjs";
@@ -17,7 +18,7 @@ const DECIDABLE = new Set([...STOPPED, "intervened"]);
  *  A symbol key, so `--json` never prints it. */
 export const RUN = Symbol("run");
 
-/** One watcher per live session: respawn a dead one and count the spawn on the session record.
+/** One watcher per live stretch (a session, or a wait): respawn a dead one and count the spawn on its record.
  *  Idempotent — `ensureWatcher` returns false while the pid file names a living process. */
 export function respawnWatcher(ctx, run, sess) {
   if (ctx.watcherAlive() || !ctx.ensureWatcher()) return false;
@@ -35,15 +36,18 @@ export function check(ctx, { readouts: withReadouts = true } = {}) {
 }
 
 /** What informs the judge but decides nothing runs after the lock is released, against the state just committed (§7.1):
- *  a stopped or waiting session's evidence, a human phase's show, and a decidable block's requires. Each command may
- *  take seconds; no writer waits on them. */
+ *  a stopped or waiting session's evidence, a human phase's show, a ready or timed-out wait's show and evidence (§7.7),
+ *  and a decidable block's requires. A wait still awaiting runs none of it. Each command may take seconds; no writer
+ *  waits on them. */
 export function readouts(ctx, r) {
   const run = r?.[RUN];
   if (!run) return r;
-  if (r.state === "human") {
+  const decidedWait = r.kind === "await" && r.state !== "awaiting";
+  if (r.state === "human" || decidedWait) {
     const show = ctx.rider.phases[r.phase]?.show;
     r.show = show ? sh(show, ctx.shellOpts(run)).output : null;
-  } else if (r.session && r.state !== "running") r.evidence = runEvidence(ctx, run);
+  }
+  if (decidedWait || (r.session && r.state !== "running")) r.evidence = runEvidence(ctx, run);
   if (r.decideWith) annotateRequires(ctx, run, r);
   return r;
 }
@@ -62,8 +66,8 @@ function annotateRequires(ctx, run, r) {
   r.decideWith = decideWithFor(ctx, r.key, r.labels.map((l) => l.label), r.requires.filter((e) => !e.ok).map((e) => e.label));
 }
 
-/** The decide-with line for `key`, in one place: `result` builds it, and the requires annotation rebuilds it marked. */
-function decideWithFor(ctx, key, labels, failing = []) {
+/** The decide-with line for `key`, in one place: `result` and `awaitResult` build it, and the requires annotation rebuilds it marked. */
+export function decideWithFor(ctx, key, labels, failing = []) {
   return decideWithLine({ rider: ctx.rider.name, multiRider: ctx.riderCount > 1, instance: ctx.instance.id, declared: !!ctx.instance.declared, key, labels, failing });
 }
 
@@ -73,6 +77,13 @@ function classify(ctx) {
   // Before every return below: a run parked at a human phase or on a stopped stretch must still show the tree moved.
   if (ctx.instance.declared && noteBranchDrift(ctx, run)) ctx.saveRun(run);
   const def = ctx.rider.phases[run.phase];
+  if (def.kind === "await") {
+    // Only the watcher runs an await check (§7.3): this reports its last stored poll, and keeps a watcher on a live wait.
+    const wait = currentSession(run);
+    if (wait?.kind !== "await") return { state: "none", error: `run ${run.runId} has no wait record for await phase ${run.phase}` };
+    if (wait.outcome === "awaiting") respawnWatcher(ctx, run, wait);
+    return awaitResult(ctx, run, def, wait);
+  }
   if (def.kind === "human") return checkHuman(ctx, run, def);
   const sess = currentSession(run);
   if (!sess) return { state: "none", error: `run ${run.runId} has no session for phase ${run.phase}` };

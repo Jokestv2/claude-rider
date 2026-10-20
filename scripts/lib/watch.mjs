@@ -69,6 +69,8 @@ export function watchLoop(ctx, { maxWaitHours = 6, pollMs = 30_000, maxResumes =
       ctx.sleep(ctx.rider.phases[polled.phase].pollSeconds * 1000);
       continue;
     }
+    // A decision entered a wait between the stored read and `check`, which reports a wait and never polls it: go round.
+    if (r.kind === "await") { log(MOVED_ON_WATCHING); continue; }
     if (r.state === "none" || r.state === "human") { log(`nothing to watch (${r.state})`); return r; }
     if (r.state === "running") { ctx.sleep(pollMs); continue; }
     if (r.state === "waiting") {
