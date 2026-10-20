@@ -237,6 +237,12 @@ test("await: a rate-limited stretch whose watcher is alive waits for the reset; 
   pid = null;
   const gone = awaitEvent(ctx, { maxMinutes: 60, pollMs: 10_000 });
   assert.deepEqual([gone.ok, gone.events, gone.reason], [true, [], "phase plan is rate-limited"]);
+  // A human turn reached it: the watcher does not wait on an intervened stretch, so neither does await.
+  pid = 4242;
+  Object.assign(run.sessions[0], { intervened: true });
+  save(ctx, run);
+  const touched = awaitEvent(ctx, { maxMinutes: 60, pollMs: 10_000 });
+  assert.deepEqual([touched.ok, touched.events, touched.reason], [true, [], "phase plan is rate-limited"]);
   p.cleanup();
 });
 
@@ -259,6 +265,10 @@ test("status: a rate-limited stretch whose watcher is alive reads as running, as
   // A human turn reached the session: check classifies it intervened, the watcher does not wait on it.
   pid = 4242;
   Object.assign(run.sessions[0], { intervened: true });
+  save(ctx, run);
+  assert.equal(status(ctx).state, "finished");
+  // A stopped stretch is finished even while its watcher's pid lingers between its emit and its exit.
+  Object.assign(run.sessions[0], { outcome: "done", intervened: false });
   save(ctx, run);
   assert.equal(status(ctx).state, "finished");
   p.cleanup();

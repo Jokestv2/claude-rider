@@ -45,7 +45,8 @@ export function isLive(run, rider) {
   return sess?.outcome === "running" || sess?.outcome === "waiting";
 }
 /** A rate-limited stretch no human turn reached is the watcher's to resume after the reset: with its watcher alive,
- *  status, await and the board all read it as running (spec decision 15), so nothing sends a judge to decide it early. */
+ *  status and await read it as running through this, and the board by its rule order (intervened first), so nothing
+ *  sends a judge to decide it early (spec decision 15). */
 export const awaitsReset = (sess) => sess?.outcome === "rate-limited" && !sess.intervened;
 export function currentSession(run) {
   for (let i = run.sessions.length - 1; i >= 0; i--) if (run.sessions[i].phase === run.phase) return run.sessions[i];
