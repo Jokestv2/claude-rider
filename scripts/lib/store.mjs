@@ -42,18 +42,23 @@ export function writeJsonAtomic(path, value, { rename = renameSync, sleep = slee
   }
 }
 
+/** The schema this executor writes. 0.2 refuses any but 4, so its first write here shuts a stale 0.2 copy out of the
+ *  instance; otherwise it would load a rider with `requires` or `locate`, skip them, and launch (§7.4). */
+const SCHEMA = 5;
 export function emptyState({ rider, instance, scope }) {
-  return { schema: 4, rider, instance, scope, version: 0, updatedAt: null, run: null, lastRun: null };
+  return { schema: SCHEMA, rider, instance, scope, version: 0, updatedAt: null, run: null, lastRun: null };
 }
-/** There is no migration (§16): a file of any other schema is refused rather than half-read. */
+/** There is no migration (§16): a file of any other schema is refused rather than half-read. Schema 5 only grew
+ *  from 4, so a schema-4 file is read as it stands. */
 export function readState(paths) {
   const state = readJson(paths.state, null);
   if (state === null) return null;
-  if (state?.schema !== 4) throw new Error(`${paths.state}: schema ${JSON.stringify(state?.schema) ?? "missing"}, but this executor reads schema 4`);
+  if (state?.schema !== 4 && state?.schema !== SCHEMA) throw new Error(`${paths.state}: schema ${JSON.stringify(state?.schema) ?? "missing"}, but this executor reads schema 4 or 5`);
   return state;
 }
 /** `version` lets a polling reader tell that the file changed; it is not a decision key (§8). */
 export function writeState(paths, state, now) {
+  state.schema = SCHEMA;
   state.version = (state.version ?? 0) + 1;
   state.updatedAt = now.toISOString();
   writeJsonAtomic(paths.state, state);
@@ -71,12 +76,13 @@ function parseEvents(text) {
   return out;
 }
 /** Called under the lock, so the highest seq on file is the last one assigned. One appendFileSync of one whole
- *  line keeps a concurrent lock-free reader from seeing half an event; a torn line before it is closed off first. */
-export function appendEvent(paths, { runId = null, kind, phase = null, key = null, text = "", by = null }, now) {
+ *  line keeps a concurrent lock-free reader from seeing half an event; a torn line before it is closed off first.
+ *  `by` and `cause` are written only by the events that carry them (`refused`). */
+export function appendEvent(paths, { runId = null, kind, phase = null, key = null, text = "", by = null, cause = null }, now) {
   mkdirSync(paths.dir, { recursive: true });
   const prior = existsSync(paths.events) ? readFileSync(paths.events, "utf8") : "";
   const seq = parseEvents(prior).reduce((max, e) => (Number.isInteger(e.seq) && e.seq > max ? e.seq : max), 0) + 1;
-  const event = { seq, at: now.toISOString(), rider: paths.rider, instance: paths.instance, runId, kind, phase, key, text, ...(by ? { by } : {}) };
+  const event = { seq, at: now.toISOString(), rider: paths.rider, instance: paths.instance, runId, kind, phase, key, text, ...(by ? { by } : {}), ...(cause ? { cause } : {}) };
   appendFileSync(paths.events, `${prior && !prior.endsWith("\n") ? "\n" : ""}${JSON.stringify(event)}\n`);
   return event;
 }

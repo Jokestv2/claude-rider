@@ -107,11 +107,11 @@ export function createContext({ rider, instance, root, local, binding, now = () 
       return run;
     },
     /** Queued, in hold order, and written when the hold commits: a record event says a write happened (§6.2), so a
-     *  hold that throws leaves none. Returns the event, whose `seq` is filled in when it lands. `by` is carried only by
-     *  the events that pass one (`refused`). */
-    event(kind, { runId = null, phase = null, key = null, text = "", by = null } = {}) {
+     *  hold that throws leaves none. Returns the event, whose `seq` is filled in when it lands. `by` and `cause` are
+     *  carried only by the events that pass them (`refused`). */
+    event(kind, { runId = null, phase = null, key = null, text = "", by = null, cause = null } = {}) {
       locked(`event ${kind}`);
-      const e = { seq: null, at: now().toISOString(), rider: paths.rider, instance: paths.instance, runId, kind, phase, key, text, ...(by ? { by } : {}) };
+      const e = { seq: null, at: now().toISOString(), rider: paths.rider, instance: paths.instance, runId, kind, phase, key, text, ...(by ? { by } : {}), ...(cause ? { cause } : {}) };
       queue.push(e);
       return e;
     },

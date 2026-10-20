@@ -12,6 +12,14 @@ test("sh runs a POSIX command through the resolved shell and captures exit + out
   assert.equal(sh("echo out; echo err 1>&2", { shell }).output, "out\nerr");
 });
 
+test("sh returns stdout apart from stderr", () => {
+  const r = sh("echo out; echo err >&2", { shell });
+  assert.equal(r.stdout, "out");
+  assert.equal(r.output, "out\nerr", "output keeps both streams");
+  assert.match(sh("printf '  %s\\n\\n' padded", { shell }).stdout, /^padded$/, "trimmed");
+  assert.match(sh("head -c 3000 /dev/zero | tr '\\0' a; echo err >&2", { shell, capBytes: 2048 }).stdout, /^a{2048}\n… capped at 2048 bytes$/, "capped at capBytes");
+});
+
 test("sh forwards env, and omitting it still inherits the parent", () => {
   const withEnv = sh("echo \"[$RIDER_WORK_BRANCH]\"", { shell, env: { ...process.env, RIDER_WORK_BRANCH: "feature/r4-grounding" } });
   assert.equal(withEnv.status, 0);

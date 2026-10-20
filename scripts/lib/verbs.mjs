@@ -2,11 +2,12 @@
 import { readFileSync } from "node:fs";
 import { RUN, readouts } from "./check.mjs";
 import { currentKey, nowLine, parseRunKey, parseStretchKey, snapshot, targetFlags } from "./keys.mjs";
+import { startPreflight } from "./preflight.mjs";
 import { legalLabels, onwardEdges, overrulable } from "./rider-md.mjs";
-import { sh } from "./shell.mjs";
 import { awaitsReset, currentSession, keyOf, newRun, scopeOf, totalCost } from "./state.mjs";
 
-export function refuse(error) { return { ok: false, error }; }
+/** `cause` names the entry command that refused (§4), as the `refused` event records it; a usage error has none. */
+export function refuse(error, cause = null) { return { ok: false, error, ...(cause ? { cause } : {}) }; }
 
 /** §8: a decision names what it judged, and that is checked inside the hold before anything else. A missing or malformed
  *  key is a usage error and leaves no trace. A stale one is refused with the state it missed and recorded as `refused`,
@@ -26,7 +27,7 @@ function keyRefusal(ctx, verb, on, { dryRun = false, by } = {}) {
   const current = snapshot(state, ctx.rider, ended);
   const error = `${reason}; now ${nowLine(current)}`;
   // On the timeline of the run it judged, at the phase the instance had reached.
-  if (!dryRun) ctx.event("refused", { runId: stretch ? k.runId : k, phase: current.phase, key: on, text: error, by });
+  if (!dryRun) ctx.event("refused", { runId: stretch ? k.runId : k, phase: current.phase, key: on, text: error, by, cause: "stale" });
   return { ok: false, stale: true, error, current };
 }
 
@@ -66,21 +67,23 @@ export function instanceFacts(ctx) {
   return [`This run serves instance \`${ctx.instance.id}\` of the rider \`${ctx.rider.name}\`. The instance's directory is \`${scopeOf(ctx.instance)}\`, relative to the project root.`];
 }
 
-/** A fresh run: intake (the one mechanical refusal before spend, §4.3), the run record, the start phase. */
-export function start(ctx, { phase = null, dryRun = false } = {}) {
+const activeRefusal = (run) => refuse(`run ${run.runId} is active at phase ${run.phase} — rider check, next, or reset first`);
+
+/** A fresh run: the pre-flight before the lock (§4), then, in the hold, the run record and the start phase. An active
+ *  run is refused before any entry command runs, and again in the hold, since one may have started meanwhile. A refused
+ *  entry command is recorded as `refused`, with no state write; a dry run records nothing. */
+export function start(ctx, { phase = null, dryRun = false, by = "judge" } = {}) {
+  const early = ctx.loadRun();
+  if (early) return activeRefusal(early);
+  const pre = startPreflight(ctx, { phase });
   return readouts(ctx, ctx.update(() => {
     const active = ctx.loadRun();
-    if (active) return refuse(`run ${active.runId} is active at phase ${active.phase} — rider check, next, or reset first`);
-    const target = phase ?? ctx.rider.start;
-    const def = ctx.rider.phases[target];
-    if (!def) return refuse(`no phase "${target}" — phases: ${Object.keys(ctx.rider.phases).join(", ")}`);
-    if (def.kind !== "session") return refuse(`"${target}" is a human phase; start names a session phase`);
-    // The run does not exist yet, so intake is told about the branch it is about to be recorded on.
-    const baseBranch = ctx.branch();
-    for (const cmd of ctx.rider.intake) {
-      const r = sh(cmd, ctx.shellOpts({ phase: target, baseBranch }));
-      if (r.status !== 0) return refuse(`intake check failed (exit ${r.status}): ${cmd}${r.output ? `\n${r.output}` : ""}`);
+    if (active) return activeRefusal(active);
+    if (!pre.ok) {
+      if (pre.cause && !dryRun) ctx.event("refused", { phase: pre.target, text: pre.error, by, cause: pre.cause });
+      return refuse(pre.error, pre.cause);
     }
+    const { target, baseBranch } = pre;
     const run = newRun({ rider: ctx.rider.name, phase: target, baseBranch, now: ctx.now(), taken: ctx.runIdsInUse(), roll: ctx.rollRunId });
     if (!dryRun) ctx.event("run-started", { runId: run.runId, phase: target });
     return enterPhase(ctx, run, target, { dryRun });

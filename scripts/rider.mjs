@@ -102,7 +102,7 @@ export async function main(argv = process.argv.slice(2), { cwd = process.cwd(), 
     const because = cli.flags.because ?? null;
     let r;
     switch (cli.verb) {
-      case "start": r = verbs.start(ctx, { phase: cli.args[0] ?? null, dryRun }); break;
+      case "start": r = verbs.start(ctx, { phase: cli.args[0] ?? null, dryRun, by }); break;
       case "next": r = verbs.next(ctx, cli.args[0], { on, because, by, dryRun }); break;
       case "check": r = check(ctx); break;
       case "resume": r = verbs.resume(ctx, { on, because, by, dryRun }); break;

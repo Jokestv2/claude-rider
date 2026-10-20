@@ -12,11 +12,12 @@ export function resolveShell(local = {}) {
   return "bash.exe";
 }
 
+/** `output` is both streams, for a person to read; `stdout` alone is for a command whose answer is the line it prints. */
 export function sh(cmd, { cwd = process.cwd(), shell = resolveShell(), timeoutMs = 30_000, capBytes = 2048, env = undefined } = {}) {
   // `env: undefined` is spawnSync's "inherit process.env", so callers that pass no env are unchanged.
   const r = spawnSync(shell, ["-c", cmd], { cwd, env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: timeoutMs, maxBuffer: 8 * 1024 * 1024, windowsHide: true });
   const output = capText(`${r.stdout ?? ""}${r.stderr ?? ""}`.trim(), capBytes);
-  return { status: r.error ? -1 : r.status, output, error: r.error?.message ?? null };
+  return { status: r.error ? -1 : r.status, output, stdout: capText((r.stdout ?? "").trim(), capBytes), error: r.error?.message ?? null };
 }
 
 export function capText(text, bytes) {

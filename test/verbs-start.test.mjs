@@ -1,10 +1,11 @@
 // test/verbs-start.test.mjs
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { newRun } from "../scripts/lib/state.mjs";
-import { endedRunPath, writeJsonAtomic, writeState } from "../scripts/lib/store.mjs";
-import { start } from "../scripts/lib/verbs.mjs";
+import { emptyState, endedRunPath, writeJsonAtomic, writeState } from "../scripts/lib/store.mjs";
+import { reset, start } from "../scripts/lib/verbs.mjs";
 import { FakeBinding } from "./fake-binding.mjs";
 import { FACT_A, INSTANCE_RIDER_MD, TEST_RIDER_MD, makeCtx, tmpProject } from "./helpers.mjs";
 
@@ -76,8 +77,81 @@ test("intake refuses before any launch and names the command", () => {
   assert.match(r.error, /intake check failed \(exit 3\): exit 3/);
   assert.equal(binding.calls.length, 0);
   assert.equal(existsSync(ctx.paths.state), false, "no run was written");
-  assert.deepEqual(ctx.readEvents(), []);
+  assert.deepEqual(ctx.readEvents().map((e) => e.kind), ["refused"], "the refusal is on file, and nothing else");
   p.cleanup();
+});
+
+/** The test rider with its one intake command replaced. */
+const withIntake = (cmd) => TEST_RIDER_MD.replace("  - test -d riders", `  - ${cmd}`);
+
+test("intake runs before the lock", (t) => {
+  // Inside the hold the lock file exists, so this intake would fail there (§4).
+  const p = tmpProject({ riderMd: withIntake("test ! -e .rider/lemmaria/default/lock") });
+  t.after(p.cleanup);
+  const ctx = makeCtx({ root: p.root, binding: new FakeBinding({ script: [{ statuses: ["running"] }] }) });
+  const r = start(ctx);
+  assert.deepEqual([r.ok, r.state, r.error], [true, "running", undefined]);
+});
+
+test("an intake refusal records one refused event with cause intake, and creates no run", (t) => {
+  const p = tmpProject({ riderMd: withIntake("test ! -f hold.flag") });
+  t.after(p.cleanup);
+  const binding = new FakeBinding({ script: [{ statuses: ["running"] }] });
+  const ctx = makeCtx({ root: p.root, binding });
+  // An instance with a past: its state.json exists, and the refusal must leave its bytes as they are.
+  const { runId } = start(ctx);
+  assert.equal(reset(ctx, { on: runId }).ok, true);
+  writeFileSync(join(p.root, "hold.flag"), "");
+  const bytes = readFileSync(ctx.paths.state, "utf8");
+  const before = ctx.readEvents().length;
+  const r = start(ctx);
+  assert.deepEqual([r.ok, r.cause, r.error], [false, "intake", "intake check failed (exit 1): test ! -f hold.flag"]);
+  assert.equal(readFileSync(ctx.paths.state, "utf8"), bytes, "no state write");
+  assert.equal(binding.calls.filter((c) => c.call === "launch").length, 1, "no launch past the first run's");
+  assert.deepEqual(readdirSync(ctx.paths.runs).length, 1, "no run created");
+  const events = ctx.readEvents().slice(before);
+  assert.deepEqual(events.map((e) => [e.kind, e.runId, e.phase, e.key, e.text, e.by, e.cause]), [["refused", null, "plan", null, r.error, "judge", "intake"]]);
+  assert.equal(events[0].seq, before + 1);
+});
+
+test("a dry run with a failing intake records nothing", (t) => {
+  const p = tmpProject({ riderMd: withIntake("exit 3") });
+  t.after(p.cleanup);
+  const binding = new FakeBinding({ script: [{}] });
+  const ctx = makeCtx({ root: p.root, binding });
+  const r = start(ctx, { dryRun: true });
+  assert.deepEqual([r.ok, r.cause, r.error], [false, "intake", "intake check failed (exit 3): exit 3"]);
+  assert.deepEqual(ctx.readEvents(), []);
+  assert.equal(existsSync(ctx.paths.state), false);
+  assert.equal(binding.calls.length, 0);
+});
+
+test("a usage refusal records nothing; --by names who sent a refused start", (t) => {
+  const p = tmpProject({ riderMd: withIntake("exit 3") });
+  t.after(p.cleanup);
+  const ctx = makeCtx({ root: p.root, binding: new FakeBinding({ script: [{}] }) });
+  for (const phase of ["merge", "ship"]) {
+    const r = start(ctx, { phase });
+    assert.deepEqual([r.ok, "cause" in r], [false, false], r.error);
+  }
+  assert.deepEqual(ctx.readEvents(), [], "an unknown or human phase is a usage error, not a refused entry");
+  start(ctx, { by: "operator" });
+  assert.deepEqual(ctx.readEvents().map((e) => [e.kind, e.by, e.cause]), [["refused", "operator", "intake"]]);
+});
+
+test("a run started while intake ran is refused inside the hold, in the words of the check before it", (t) => {
+  // The intake itself plays the other writer: it puts an active run in place between the unlocked read and the hold.
+  const p = tmpProject({ riderMd: withIntake("mkdir -p .rider/lemmaria/default && cp other.json .rider/lemmaria/default/state.json") });
+  t.after(p.cleanup);
+  const binding = new FakeBinding({ script: [{}] });
+  const ctx = makeCtx({ root: p.root, binding });
+  const other = { ...emptyState({ rider: "lemmaria", instance: "default", scope: "." }), version: 1, run: newRun({ rider: "lemmaria", phase: "build", baseBranch: "main", now: new Date(), roll: () => "beef" }) };
+  writeFileSync(join(p.root, "other.json"), JSON.stringify(other));
+  const raced = start(ctx);
+  assert.deepEqual([raced.ok, raced.error], [false, "run beef is active at phase build — rider check, next, or reset first"]);
+  assert.equal(start(ctx).error, raced.error, "the unlocked check gives the same refusal");
+  assert.equal(binding.calls.length, 0);
+  assert.deepEqual(ctx.readEvents(), [], "an active run is no refused entry");
 });
 
 test("a second start on an active run is refused", () => {

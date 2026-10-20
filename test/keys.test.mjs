@@ -39,7 +39,7 @@ test("the stale decision of §8 is refused, names the new phase and the other ac
   assert.equal(late.current.key, `${r}.2`);
   const events = judge.readEvents();
   assert.equal(events.length, before + 1);
-  assert.deepEqual([events.at(-1).kind, events.at(-1).runId, events.at(-1).phase, events.at(-1).key, events.at(-1).text, events.at(-1).by], ["refused", r, "build", `${r}.1`, late.error, "judge"], "on the judged run's timeline, at the phase it reached, naming who sent it");
+  assert.deepEqual([events.at(-1).kind, events.at(-1).runId, events.at(-1).phase, events.at(-1).key, events.at(-1).text, events.at(-1).by, events.at(-1).cause], ["refused", r, "build", `${r}.1`, late.error, "judge", "stale"], "on the judged run's timeline, at the phase it reached, naming who sent it and why it was refused");
   const run = judge.loadRun();
   assert.deepEqual([run.phase, run.transitions.length, run.sessions.length], ["build", 1, 2], "nothing moved");
   assert.equal(render("next", late), `refused: ${late.error}\nnow: phase build · run ${r} · latest ${r}.2 (done) · last: plan —planned→ build by operator: the plan stands`);
@@ -76,7 +76,7 @@ test("resume, overrule and reset refuse a stale key", (t) => {
   const refused = (res, key, by) => {
     assert.deepEqual([res.ok, res.stale], [false, true], res.error);
     const e = ctx.readEvents().at(-1);
-    assert.deepEqual([e.kind, e.runId, e.key, e.text, e.by], ["refused", key.split(".")[0], key, res.error, by]);
+    assert.deepEqual([e.kind, e.runId, e.key, e.text, e.by, e.cause], ["refused", key.split(".")[0], key, res.error, by, "stale"]);
   };
   const { runId: r } = start(ctx);
   check(ctx);

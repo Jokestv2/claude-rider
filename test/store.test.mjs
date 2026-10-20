@@ -6,7 +6,9 @@ import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFi
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import { acquireLock, appendEvent, emptyState, endedRunPath, guardV3, instancePaths, readEvents, readJson, readState, riderPaths, WAKE_KINDS, writeJsonAtomic, writeState } from "../scripts/lib/store.mjs";
-import { FakeClock } from "./helpers.mjs";
+import { status } from "../scripts/lib/verbs.mjs";
+import { FakeBinding } from "./fake-binding.mjs";
+import { FakeClock, makeCtx, tmpProject } from "./helpers.mjs";
 
 const now = new Date("2026-10-19T12:00:00Z");
 const tmpRoot = () => mkdtempSync(join(tmpdir(), "rider-store-"));
@@ -22,7 +24,7 @@ test("paths: one directory per instance under the rider's, laid out as §6", () 
   });
   assert.equal(endedRunPath(instancePaths("/p", "lemmaria", "alpha"), { runId: "ab12", startedAt: "2026-10-19T12:00:00.000Z" }), join(d, "runs", "2026-10-19T12-00-00-000Z-ab12.json"));
   assert.deepEqual(WAKE_KINDS, ["done", "gone", "waiting", "intervened", "rate-limited", "watcher-stopped"]);
-  assert.deepEqual(emptyState({ rider: "lemmaria", instance: "alpha", scope: "nodes/alpha" }), { schema: 4, rider: "lemmaria", instance: "alpha", scope: "nodes/alpha", version: 0, updatedAt: null, run: null, lastRun: null });
+  assert.deepEqual(emptyState({ rider: "lemmaria", instance: "alpha", scope: "nodes/alpha" }), { schema: 5, rider: "lemmaria", instance: "alpha", scope: "nodes/alpha", version: 0, updatedAt: null, run: null, lastRun: null });
 });
 
 test("state is written atomically: version counts writes, no temp file is left", () => {
@@ -30,7 +32,7 @@ test("state is written atomically: version counts writes, no temp file is left",
   const paths = instancePaths(root, "lemmaria", "default");
   assert.equal(readState(paths), null);
   const state = writeState(paths, emptyState({ rider: "lemmaria", instance: "default", scope: "." }), now);
-  assert.deepEqual([state.version, state.updatedAt], [1, now.toISOString()]);
+  assert.deepEqual([state.schema, state.version, state.updatedAt], [5, 1, now.toISOString()]);
   writeState(paths, readState(paths), new Date("2026-10-19T12:05:00Z"));
   const back = readState(paths);
   assert.equal(back.version, 2);
@@ -64,7 +66,55 @@ test("a state file of another schema is refused, naming the file", () => {
   mkdirSync(paths.dir, { recursive: true });
   writeFileSync(paths.state, JSON.stringify({ schema: 3 }));
   assert.throws(() => readState(paths), /state\.json.*schema 3/);
-  assert.throws(() => readState(paths), /reads schema 4/);
+  assert.throws(() => readState(paths), /reads schema 4 or 5$/);
+  writeFileSync(paths.state, JSON.stringify({ schema: 6 }));
+  assert.throws(() => readState(paths), /schema 6, but this executor reads schema 4 or 5$/);
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("a schema-4 state is read, and rewritten as schema 5 with its fields intact", () => {
+  // What 0.2 leaves behind: an active run on a session stretch, written by hand as 0.2's writeState wrote it.
+  const p = tmpProject();
+  const paths = instancePaths(p.root, "lemmaria", "default");
+  const run = {
+    rider: "lemmaria", runId: "ab12", startedAt: "2026-10-19T11:00:00.000Z", baseBranch: "main", phase: "build", visits: { plan: 1, build: 1 },
+    transitions: [{ at: "2026-10-19T11:30:00.000Z", from: "plan", label: "planned", to: "build", because: "ok", by: "judge" }],
+    sessions: [
+      { phase: "plan", model: "fable", id: "sess-1", shortId: "s1", resumedFrom: null, resumeReason: null, at: "2026-10-19T11:00:00.000Z", outcome: "done", baselineTurns: 0, watcherSpawns: 1, cost: 0.5, turns: 5 },
+      { phase: "build", model: "opus", id: "sess-2", shortId: "s2", resumedFrom: null, resumeReason: null, at: "2026-10-19T11:30:00.000Z", outcome: "running", baselineTurns: 0, watcherSpawns: 1 },
+    ],
+    notes: [], workBranch: "feature/x",
+  };
+  const lastRun = { runId: "cd34", phase: "plan", startedAt: "2026-10-18T09:00:00.000Z", endedAt: "2026-10-18T09:30:00.000Z", endedBy: "reset", reason: "rider reset", totalCost: 0.2, overrulable: [] };
+  const v4 = { schema: 4, rider: "lemmaria", instance: "default", scope: ".", version: 7, updatedAt: "2026-10-19T11:30:00.000Z", run, lastRun };
+  mkdirSync(paths.dir, { recursive: true });
+  writeFileSync(paths.state, `${JSON.stringify(v4, null, 2)}\n`);
+  assert.deepEqual(readState(paths), v4, "read as it stands");
+  const st = status(makeCtx({ root: p.root, binding: new FakeBinding({ script: [] }) }));
+  assert.deepEqual([st.state, st.runId, st.phase, st.key, st.lastRun], ["running", "ab12", "build", "ab12.2", lastRun], "status reads it as it stands");
+  assert.equal(readState(paths).schema, 4, "a read writes nothing");
+  writeState(paths, readState(paths), now);
+  assert.deepEqual(readState(paths), { ...v4, schema: 5, version: 8, updatedAt: now.toISOString() });
+  p.cleanup();
+});
+
+test("0.2's readState refuses a state 0.3 wrote", () => {
+  const root = tmpRoot();
+  const paths = instancePaths(root, "lemmaria", "default");
+  // 0.2's readState, as it shipped: a stale 0.2 executor reads state.json this way on every verb.
+  const v02ReadState = (paths) => {
+    const state = readJson(paths.state, null);
+    if (state === null) return null;
+    if (state?.schema !== 4) throw new Error(`${paths.state}: schema ${JSON.stringify(state?.schema) ?? "missing"}, but this executor reads schema 4`);
+    return state;
+  };
+  writeState(paths, emptyState({ rider: "lemmaria", instance: "default", scope: "." }), now);
+  assert.throws(() => v02ReadState(paths), /state\.json: schema 5, but this executor reads schema 4$/);
+  // A schema-4 state rewritten by 0.3 is shut to 0.2 from then on.
+  writeFileSync(paths.state, JSON.stringify({ schema: 4, rider: "lemmaria", instance: "default", scope: ".", version: 1, updatedAt: null, run: null, lastRun: null }));
+  assert.equal(v02ReadState(paths).schema, 4);
+  writeState(paths, readState(paths), now);
+  assert.throws(() => v02ReadState(paths), /schema 5/);
   rmSync(root, { recursive: true, force: true });
 });
 
@@ -82,6 +132,18 @@ test("events get seq from 1; a torn last line is skipped and the next append sta
   assert.deepEqual(readEvents(paths).map((e) => e.seq), [1, 2, 3]);
   assert.deepEqual(readEvents(paths).at(-1), third);
   assert.equal(readFileSync(paths.events, "utf8").split("\n").length, 5, "two events, the torn line, the third event, and the final newline");
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("an event keeps cause only when given", () => {
+  const root = tmpRoot();
+  const paths = instancePaths(root, "lemmaria", "alpha");
+  const plain = appendEvent(paths, { runId: "ab12", kind: "decided", phase: "plan", key: "ab12.1", text: "planned → build", by: "judge" }, now);
+  const refused = appendEvent(paths, { kind: "refused", phase: "plan", text: "intake check failed (exit 1): x", by: "judge", cause: "intake" }, now);
+  assert.equal("cause" in plain, false);
+  assert.deepEqual(refused, { seq: 2, at: now.toISOString(), rider: "lemmaria", instance: "alpha", runId: null, kind: "refused", phase: "plan", key: null, text: "intake check failed (exit 1): x", by: "judge", cause: "intake" });
+  assert.deepEqual(readEvents(paths), [plain, refused], "on file as returned");
+  assert.equal("cause" in readEvents(paths)[0], false);
   rmSync(root, { recursive: true, force: true });
 });
 
