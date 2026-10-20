@@ -49,12 +49,14 @@ export function validateRider(data, promptExists) {
     if (!p || typeof p !== "object" || Array.isArray(p)) { e.push(`phases.${name}: not a mapping`); continue; }
     if (p.human === true) {
       if (typeof p.check !== "string" || !p.check.trim()) e.push(`phases.${name}: a human phase needs a check command`);
-      for (const k of ["prompt", "model", "edges"]) if (k in p) e.push(`phases.${name}: ${k} is not allowed on a human phase`);
+      // Entering a human phase spends nothing, so it has nothing for `requires` to guard (§5.1).
+      for (const k of ["prompt", "model", "edges", "requires"]) if (k in p) e.push(`phases.${name}: ${k} is not allowed on a human phase`);
       continue;
     }
     const prompt = typeof p.prompt === "string" ? p.prompt : `${name}.md`;
     if (!promptExists(prompt)) e.push(`phases.${name}: prompt file ${prompt} not found`);
     if (typeof p.model !== "string" || !p.model.trim()) e.push(`phases.${name}: model is required`);
+    if (p.requires != null && (!Array.isArray(p.requires) || p.requires.some((c) => typeof c !== "string" || !c.trim()))) e.push(`phases.${name}: requires must be a list of shell commands`);
     if (!p.edges || typeof p.edges !== "object" || Array.isArray(p.edges) || !Object.keys(p.edges).length) e.push(`phases.${name}: edges is required (outcome label → phase)`);
     else for (const [label, to] of Object.entries(p.edges)) {
       if (RESERVED.includes(label)) e.push(`phases.${name}.edges: "${label}" is a reserved label`);
@@ -88,7 +90,7 @@ function normalize(data, dir, body) {
   for (const [name, p] of Object.entries(data.phases)) {
     phases[name] = p.human === true
       ? { kind: "human", check: p.check, show: typeof p.show === "string" ? p.show : null }
-      : { kind: "session", prompt: join(dir, typeof p.prompt === "string" ? p.prompt : `${name}.md`), model: p.model, edges: { ...p.edges } };
+      : { kind: "session", prompt: join(dir, typeof p.prompt === "string" ? p.prompt : `${name}.md`), model: p.model, edges: { ...p.edges }, requires: [...(p.requires ?? [])] };
   }
   return {
     name: data.name, dir, start: data.start, phases, instances: data.instances ?? null,

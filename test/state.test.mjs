@@ -42,22 +42,26 @@ test("a run records base and work branch", () => {
 
   assert.deepEqual(riderEnv({ name: "lemmaria" }, { runId: "c84c", phase: "build", baseBranch: "main", workBranch: "feature/r4-grounding", workTip: "0f1e2d3c" }, { id: "default", scope: "." }), {
     RIDER_NAME: "lemmaria", RIDER_INSTANCE: "default", RIDER_SCOPE: ".", RIDER_RUN_ID: "c84c", RIDER_PHASE: "build",
-    RIDER_BASE_BRANCH: "main", RIDER_WORK_BRANCH: "feature/r4-grounding", RIDER_WORK_TIP: "0f1e2d3c",
+    RIDER_BASE_BRANCH: "main", RIDER_WORK_BRANCH: "feature/r4-grounding", RIDER_WORK_TIP: "0f1e2d3c", RIDER_FROM_PHASE: "", RIDER_LABEL: "",
   });
   assert.deepEqual(riderEnv({ name: "lemmaria" }, null, { id: "a", scope: "nodes/a" }), {
     RIDER_NAME: "lemmaria", RIDER_INSTANCE: "a", RIDER_SCOPE: "nodes/a", RIDER_RUN_ID: "", RIDER_PHASE: "",
-    RIDER_BASE_BRANCH: "", RIDER_WORK_BRANCH: "", RIDER_WORK_TIP: "",
+    RIDER_BASE_BRANCH: "", RIDER_WORK_BRANCH: "", RIDER_WORK_TIP: "", RIDER_FROM_PHASE: "", RIDER_LABEL: "",
   });
 
   // The base is read from `baseBranch` alone: a record carrying only the legacy `branch` has no base, and an
   // absent work branch is "". No instance is the rider without instances: `default`, at the root.
   assert.deepEqual(riderEnv({ name: "lemmaria" }, { runId: "c84c", phase: "merge", branch: "main" }), {
     RIDER_NAME: "lemmaria", RIDER_INSTANCE: "default", RIDER_SCOPE: ".", RIDER_RUN_ID: "c84c", RIDER_PHASE: "merge",
-    RIDER_BASE_BRANCH: "", RIDER_WORK_BRANCH: "", RIDER_WORK_TIP: "",
+    RIDER_BASE_BRANCH: "", RIDER_WORK_BRANCH: "", RIDER_WORK_TIP: "", RIDER_FROM_PHASE: "", RIDER_LABEL: "",
   });
 
   // No run at all (intake, before newRun) must not throw.
   assert.equal(riderEnv({ name: "lemmaria" }, null).RIDER_RUN_ID, "");
+
+  // An entry command (§4) is told the phase about to be entered, not the run's; `requires` also the phase left and the label.
+  const entry = riderEnv({ name: "lemmaria" }, { runId: "c84c", phase: "plan" }, { id: "default", scope: "." }, { phase: "build", fromPhase: "plan", label: "planned" });
+  assert.deepEqual([entry.RIDER_RUN_ID, entry.RIDER_PHASE, entry.RIDER_FROM_PHASE, entry.RIDER_LABEL], ["c84c", "build", "plan", "planned"]);
 });
 
 test("a corrupt state file names itself in the error", () => {

@@ -2,7 +2,7 @@
 import { readFileSync } from "node:fs";
 import { RUN, readouts } from "./check.mjs";
 import { currentKey, nowLine, parseRunKey, parseStretchKey, snapshot, targetFlags } from "./keys.mjs";
-import { startPreflight } from "./preflight.mjs";
+import { edgePreflight, startPreflight } from "./preflight.mjs";
 import { legalLabels, onwardEdges, overrulable } from "./rider-md.mjs";
 import { awaitsReset, currentSession, keyOf, newRun, scopeOf, totalCost } from "./state.mjs";
 
@@ -68,6 +68,19 @@ export function instanceFacts(ctx) {
 }
 
 const activeRefusal = (run) => refuse(`run ${run.runId} is active at phase ${run.phase} — rider check, next, or reset first`);
+
+/** The hold's half of an edge's pre-flight (§4). The key matched, so a target with `requires` is entered only on a pass
+ *  computed for this phase and this target. A failed one changes nothing: it is recorded as `refused`, except under
+ *  --dry-run, and the same decision is retryable once the condition holds. */
+function requiresRefusal(ctx, pre, { run, to, on, by, dryRun }) {
+  if (!ctx.rider.phases[to]?.requires?.length) return null;
+  // Unreachable for `next`, whose stretch key pins the phase. A run key does not: the run may have been revived and
+  // stopped again, at another phase, while the commands ran.
+  if (!pre || pre.to !== to || pre.from !== run.phase) return refuse("the instance changed while its preconditions ran — run it again");
+  if (pre.result.ok) return null;
+  if (!dryRun) ctx.event("refused", { runId: run.runId, phase: run.phase, key: on, text: pre.result.error, by, cause: "requires" });
+  return refuse(pre.result.error, "requires");
+}
 
 /** A fresh run: the pre-flight before the lock (§4), then, in the hold, the run record and the start phase. An active
  *  run is refused before any entry command runs, and again in the hold, since one may have started meanwhile. A refused
@@ -138,8 +151,11 @@ export function enterPhase(ctx, run, phase, { dryRun = false } = {}) {
   return { ok: true, state: "running", runId: run.runId, phase, visit: run.visits[phase], model, session: ids, attach: ctx.binding.attachHint(ids) };
 }
 
-/** The judge's decision: a label from the current phase's edges (§4.3), or the two reserved ones. */
+/** The judge's decision: a label from the current phase's edges (§4.3), or the two reserved ones. The target's
+ *  `requires` run before the lock (§4), and only on the current key: a stale one is refused in the hold without them. */
 export function next(ctx, label, { on, because = null, by = "judge", dryRun = false } = {}) {
+  const seen = ctx.loadRun();
+  const pre = seen && currentKey(seen) === on ? edgePreflight(ctx, seen, { on, label }) : null;
   return readouts(ctx, ctx.update(() => {
     const refused = keyRefusal(ctx, "next", on, { dryRun, by });
     if (refused) return refused;
@@ -152,6 +168,8 @@ export function next(ctx, label, { on, because = null, by = "judge", dryRun = fa
     // Only the declared labels: a label like "toString" must not read through Object.prototype on the phase's edges.
     const to = legalLabels(ctx.rider, run.phase).find((l) => l.label === label)?.to ?? null;
     if (!to) return refuse(`"${label}" is not an edge of ${run.phase} — legal: ${labelList(ctx, run.phase)}`);
+    const blocked = requiresRefusal(ctx, pre, { run, to, on, by, dryRun });
+    if (blocked) return blocked;
     if (dryRun) return to === "operator" ? { ok: true, state: "dry-run", to: "operator" } : enterPhase(ctx, run, to, { dryRun: true });
     run.transitions.push({ at: ctx.now().toISOString(), from: run.phase, label, to, because, by });
     ctx.event("decided", { runId: run.runId, phase: run.phase, key: keyOf(run, sess), text: `${label} → ${to}${because ? `: ${because}` : ""}` });
@@ -170,6 +188,10 @@ export function next(ctx, label, { on, because = null, by = "judge", dryRun = fa
  *  to carry it. The judge's stop stays in `transitions` and the ruling lands beside it as
  *  `by: "operator"`: the pair is one judge call and its review, which is what the record is read for. */
 export function overrule(ctx, label, { on, because, dryRun = false } = {}) {
+  // The pre-flight (§4), before the lock, against the run the key names when it is the last ended one.
+  const seen = ctx.readState();
+  const ended = !seen.run && seen.lastRun?.runId === on ? ctx.lastEndedRun() : null;
+  const pre = ended ? edgePreflight(ctx, ended, { on, label }) : null;
   return readouts(ctx, ctx.update(() => {
     const refused = keyRefusal(ctx, "overrule", on, { dryRun, by: "operator" });
     if (refused) return refused;
@@ -184,6 +206,8 @@ export function overrule(ctx, label, { on, because, dryRun = false } = {}) {
     const to = onward.find((l) => l.label === label)?.to ?? null;
     if (!to) return refuse(`"${label}" is not an edge of ${run.phase} that leaves for another phase — legal: ${legal}`);
     if (!because?.trim()) return refuse("overrule needs --because: the operator's ruling, in their words, is the record");
+    const blocked = requiresRefusal(ctx, pre, { run, to, on, by: "operator", dryRun });
+    if (blocked) return blocked;
     if (dryRun) return enterPhase(ctx, run, to, { dryRun: true });
     // The ruling first, then the revival that writes it: no state.json ever holds this run without it.
     run.transitions.push({ at: ctx.now().toISOString(), from: run.phase, label, to, because: because.trim(), by: "operator" });

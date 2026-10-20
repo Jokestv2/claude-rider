@@ -70,6 +70,10 @@ Test rider: the §2.4 graph with commands that work in an empty directory.
 
 /** The test rider with its instances declared as the directories under `nodes/`. */
 export const INSTANCE_RIDER_MD = TEST_RIDER_MD.replace("name: lemmaria\n", "name: lemmaria\ninstances: nodes/*\n");
+/** A rider whose `phase` may be entered only when `cmds` all pass (§5.1), written as a flow list, so no command may hold a comma. */
+export const requiring = (phase, cmds, md = TEST_RIDER_MD) => md.replace(`\n  ${phase}:\n`, `\n  ${phase}:\n    requires: [ ${cmds.join(", ")} ]\n`);
+/** The test rider whose build waits on a flag file: plan's `planned` is refused until `ok.flag` exists. */
+export const REQUIRES_RIDER_MD = requiring("build", ["test -f ok.flag"]);
 /** What a session on instance `a` of that rider is told (§12), written out rather than built: the exact text is the spec's. */
 export const FACT_A = "This run serves instance `a` of the rider `lemmaria`. The instance's directory is `nodes/a`, relative to the project root.";
 

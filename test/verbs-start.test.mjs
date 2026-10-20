@@ -7,7 +7,7 @@ import { newRun } from "../scripts/lib/state.mjs";
 import { emptyState, endedRunPath, writeJsonAtomic, writeState } from "../scripts/lib/store.mjs";
 import { reset, start } from "../scripts/lib/verbs.mjs";
 import { FakeBinding } from "./fake-binding.mjs";
-import { FACT_A, INSTANCE_RIDER_MD, TEST_RIDER_MD, makeCtx, tmpProject } from "./helpers.mjs";
+import { FACT_A, INSTANCE_RIDER_MD, TEST_RIDER_MD, makeCtx, requiring, tmpProject } from "./helpers.mjs";
 
 test("a fresh start runs intake, creates the run in state.json, launches the start phase, spawns the watcher", () => {
   const p = tmpProject();
@@ -152,6 +152,36 @@ test("a run started while intake ran is refused inside the hold, in the words of
   assert.equal(start(ctx).error, raced.error, "the unlocked check gives the same refusal");
   assert.equal(binding.calls.length, 0);
   assert.deepEqual(ctx.readEvents(), [], "an active run is no refused entry");
+});
+
+test("a failing requires on the start phase creates no run, and records cause requires", (t) => {
+  const p = tmpProject({ riderMd: requiring("plan", ["test -f ok.flag"]) });
+  t.after(p.cleanup);
+  const binding = new FakeBinding({ script: [{ statuses: ["running"] }] });
+  const ctx = makeCtx({ root: p.root, binding });
+  const r = start(ctx);
+  assert.deepEqual([r.ok, r.cause, r.error], [false, "requires", "requires check failed for plan (exit 1): test -f ok.flag"]);
+  assert.equal(existsSync(ctx.paths.state), false, "no run was written");
+  assert.equal(binding.calls.length, 0);
+  assert.deepEqual(ctx.readEvents().map((e) => [e.kind, e.runId, e.phase, e.key, e.text, e.by, e.cause]), [["refused", null, "plan", null, r.error, "judge", "requires"]]);
+  writeFileSync(join(p.root, "ok.flag"), "");
+  assert.equal(start(ctx).state, "running", "retryable once the condition holds");
+});
+
+test("start runs the target's requires after intake, with no run, no phase left and no label", (t) => {
+  // A phase named by the operator is a target like the start phase: its requires run too.
+  const p = tmpProject({ riderMd: requiring("build", ["env > seen.env", "test -f ok.flag"], withIntake("test -f go.flag")) });
+  t.after(p.cleanup);
+  const seen = join(p.root, "seen.env");
+  const ctx = makeCtx({ root: p.root, binding: new FakeBinding({ script: [{ statuses: ["running"] }] }) });
+  assert.equal(start(ctx, { phase: "build" }).cause, "intake");
+  assert.equal(existsSync(seen), false, "a failed intake runs no requires");
+  writeFileSync(join(p.root, "go.flag"), "");
+  assert.equal(start(ctx, { phase: "build" }).cause, "requires", "build still waits on ok.flag");
+  const env = readFileSync(seen, "utf8");
+  for (const line of ["RIDER_PHASE=build", "RIDER_FROM_PHASE=", "RIDER_LABEL=", "RIDER_RUN_ID="]) assert.match(env, new RegExp(`^${line}$`, "m"));
+  writeFileSync(join(p.root, "ok.flag"), "");
+  assert.equal(start(ctx, { phase: "build" }).phase, "build");
 });
 
 test("a second start on an active run is refused", () => {

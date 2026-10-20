@@ -117,7 +117,8 @@ export function createContext({ rider, instance, root, local, binding, now = () 
     },
     readEvents: () => readEvents(paths),
     writeLog: (name, data) => writeLog(paths, name, data),
-    shellOpts: (run = null) => ({ cwd: root, shell, env: { ...process.env, ...riderEnv(rider, run, instance) } }),
+    /** `entry` is what an entry command is told beyond the run (`riderEnv`): the phase about to be entered, and for `requires` the phase left and the label. */
+    shellOpts: (run = null, entry = {}) => ({ cwd: root, shell, env: { ...process.env, ...riderEnv(rider, run, instance, entry) } }),
     branch: () => { const r = sh("git branch --show-current", { cwd: root, shell }); return r.status === 0 && r.output ? r.output.split("\n")[0].trim() : null; },
     // The ref travels in the environment, never in the command text: a branch name is not shell-safe.
     tip: (ref) => { const r = sh('git rev-parse --verify --quiet "$RIDER_REF^{commit}"', { cwd: root, shell, env: { ...process.env, RIDER_REF: ref } }); return r.status === 0 && /^[0-9a-f]{40,64}$/.test(r.output) ? r.output : null; },

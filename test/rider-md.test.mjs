@@ -41,6 +41,30 @@ test("every structural error is named", () => {
   }
 });
 
+test("requires: a list of non-empty commands on a session phase, normalized to [] when absent", (t) => {
+  // §5.1. The block form, the flow form and an empty list all read as lists.
+  for (const requires of [["tool budget --ok"], ["tool gate approved --current", "tool budget --ok"], []]) {
+    const ok = structuredClone(data);
+    ok.phases.build.requires = requires;
+    assert.deepEqual(validateRider(ok, allPrompts), [], JSON.stringify(requires));
+  }
+  for (const requires of ["tool budget --ok", ["tool budget --ok", 3], [""], [null], { a: "x" }]) {
+    const bad = structuredClone(data);
+    bad.phases.build.requires = requires;
+    assert.deepEqual(validateRider(bad, allPrompts), ["phases.build: requires must be a list of shell commands"], JSON.stringify(requires));
+  }
+  const human = structuredClone(data);
+  human.phases.merge.requires = ["tool budget --ok"];
+  assert.deepEqual(validateRider(human, allPrompts), ["phases.merge: requires is not allowed on a human phase"]);
+
+  const md = TEST_RIDER_MD.replace("\n  build:\n", "\n  build:\n    requires:\n      - test -f ok.flag\n      - tool budget --ok\n").replace("\n  close:\n", "\n  close:\n    requires: [ test -d riders ]\n");
+  const p = tmpProject({ riderMd: md });
+  t.after(p.cleanup);
+  const rider = loadRider(p.file);
+  assert.deepEqual([rider.phases.plan.requires, rider.phases.build.requires, rider.phases.close.requires], [[], ["test -f ok.flag", "tool budget --ok"], ["test -d riders"]]);
+  assert.equal("requires" in rider.phases.merge, false, "a human phase has none");
+});
+
 test("a missing prompt file is an error; prompt defaults to <phase>.md", () => {
   const errs = validateRider(data, (p) => p !== "build.md");
   assert.deepEqual(errs, ["phases.build: prompt file build.md not found"]);

@@ -1,20 +1,20 @@
 // test/verbs-overrule.test.mjs — the operator's ruling on a stop the judge routed to `operator`
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readdirSync, writeFileSync } from "node:fs";
+import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { check } from "../scripts/lib/check.mjs";
 import { render } from "../scripts/lib/render.mjs";
 import { next, note, overrule, reset, start, status } from "../scripts/lib/verbs.mjs";
 import { FakeBinding } from "./fake-binding.mjs";
-import { FakeClock, INSTANCE_RIDER_MD, TEST_RIDER_MD, makeCtx, tmpProject } from "./helpers.mjs";
+import { FakeClock, INSTANCE_RIDER_MD, REQUIRES_RIDER_MD, TEST_RIDER_MD, makeCtx, requiring, tmpProject } from "./helpers.mjs";
 
 const done = (lastText, extra = {}) => ({ statuses: ["done"], read: { lastText, turns: 5, ...extra } });
 const GATE = "STATUS: gate green\n<promise>MILESTONE GATE GREEN</promise>";
 
 /** Run 842b's shape: close printed `gate green`, the judge would not pick it and stopped the run. */
-function stoppedAtOperator(script = [done(GATE, { cost: 33 })], phase = "close") {
-  const p = tmpProject();
+function stoppedAtOperator(script = [done(GATE, { cost: 33 })], phase = "close", riderMd = TEST_RIDER_MD) {
+  const p = tmpProject({ riderMd });
   const binding = new FakeBinding({ script });
   const ctx = makeCtx({ root: p.root, binding });
   start(ctx, { phase });
@@ -83,6 +83,46 @@ test("overrule into a session phase launches it like any edge", () => {
     assert.deepEqual([r.state, r.phase], ["running", "build"]);
     assert.equal(binding.calls.filter((c) => c.call === "launch")[1].prompt, "BUILD PROMPT");
     assert.deepEqual(ctx.loadRun().visits, { plan: 1, build: 1 });
+  } finally { p.cleanup(); }
+});
+
+test("an overrule to a target whose requires fails is refused and leaves the run ended", () => {
+  const { p, ctx, binding, stop } = stoppedAtOperator([done("STATUS: planned\n<promise>X</promise>"), { statuses: ["running"] }], "plan", REQUIRES_RIDER_MD);
+  try {
+    const bytes = readFileSync(ctx.paths.state, "utf8");
+    const before = ctx.readEvents().length;
+    const because = "the plan stands; the judge misread the evidence";
+    const d = overrule(ctx, "planned", { on: stop.runId, because, dryRun: true });
+    assert.deepEqual([d.ok, d.cause], [false, "requires"], "a dry run runs the pre-flight");
+    assert.equal(ctx.readEvents().length, before, "and records nothing");
+    const r = overrule(ctx, "planned", { on: stop.runId, because });
+    assert.deepEqual([r.ok, r.cause, r.error], [false, "requires", "requires check failed for build (exit 1): test -f ok.flag"]);
+    assert.equal(ctx.loadRun(), null, "nothing revived");
+    assert.deepEqual([ctx.lastEndedRun().endedBy, ctx.lastEndedRun().transitions.length, readdirSync(ctx.paths.runs).length], ["operator", 1, 1]);
+    assert.equal(readFileSync(ctx.paths.state, "utf8"), bytes, "no state write");
+    assert.equal(binding.calls.filter((c) => c.call === "launch").length, 1);
+    assert.deepEqual(ctx.readEvents().slice(before).map((e) => [e.kind, e.runId, e.phase, e.key, e.text, e.by, e.cause]), [["refused", stop.runId, "plan", stop.runId, r.error, "operator", "requires"]]);
+    writeFileSync(join(p.root, "ok.flag"), "");
+    assert.deepEqual([overrule(ctx, "planned", { on: stop.runId, because }).state, ctx.loadRun().phase], ["running", "build"], "retryable once the condition holds");
+  } finally { p.cleanup(); }
+});
+
+test("an overrule whose run stopped again elsewhere while its requires ran is refused, and runs nothing", () => {
+  // A run key does not pin the phase: here the requirement itself plays the other writer, putting in place a record
+  // of the same run stopped at close, from where `planned` also leads to build. The pass was computed leaving plan.
+  const md = requiring("build", ["cp moved.json .rider/lemmaria/default/runs/*.json"], TEST_RIDER_MD.replace("edges: { gate green: merge, blocked: operator }", "edges: { gate green: merge, planned: build, blocked: operator }"));
+  const { p, ctx, binding, stop } = stoppedAtOperator([done("STATUS: planned\n<promise>X</promise>"), { statuses: ["running"] }], "plan", md);
+  try {
+    const moved = ctx.lastEndedRun();
+    moved.phase = "close";
+    moved.transitions.at(-1).from = "close";
+    writeFileSync(join(p.root, "moved.json"), JSON.stringify(moved));
+    const before = ctx.readEvents().length;
+    const r = overrule(ctx, "planned", { on: stop.runId, because: "the plan stands" });
+    assert.deepEqual([r.ok, r.error], [false, "the instance changed while its preconditions ran — run it again"]);
+    assert.deepEqual([ctx.loadRun(), ctx.lastEndedRun().phase], [null, "close"], "nothing revived");
+    assert.equal(binding.calls.filter((c) => c.call === "launch").length, 1);
+    assert.equal(ctx.readEvents().length, before);
   } finally { p.cleanup(); }
 });
 

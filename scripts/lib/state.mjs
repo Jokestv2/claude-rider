@@ -20,18 +20,22 @@ export function newRun({ rider, phase, baseBranch, now, taken = new Set(), roll 
 /** An instance's directory relative to the project root (§11), in one place: `$RIDER_SCOPE` and the pathspec that
  *  scopes gate precision must never disagree. No instance is a rider without `instances`, scoped to the root. */
 export const scopeOf = (instance) => instance?.scope || ".";
-/** What a RIDER.md-declared command (intake, check, show, evidence) is told about the run and the instance it serves
- *  (§11). No instance is a rider without `instances`: its one instance, `default`. */
-export function riderEnv(rider, run, instance) {
+/** What a RIDER.md-declared command (intake, requires, check, show, evidence) is told about the run and the instance it
+ *  serves (§11). No instance is a rider without `instances`: its one instance, `default`. An entry command is told the
+ *  phase about to be entered as `phase`, and `requires` also the phase being left and the label taken (§4):
+ *  `RIDER_FROM_PHASE` and `RIDER_LABEL` are empty for every other command. */
+export function riderEnv(rider, run, instance, { phase, fromPhase = "", label = "" } = {}) {
   return {
     RIDER_NAME: rider?.name ?? "",
     RIDER_INSTANCE: instance?.id ?? "default",
     RIDER_SCOPE: scopeOf(instance),
     RIDER_RUN_ID: run?.runId ?? "",
-    RIDER_PHASE: run?.phase ?? "",
+    RIDER_PHASE: phase ?? run?.phase ?? "",
     RIDER_BASE_BRANCH: run?.baseBranch ?? "",
     RIDER_WORK_BRANCH: run?.workBranch ?? "",
     RIDER_WORK_TIP: run?.workTip ?? "",
+    RIDER_FROM_PHASE: fromPhase ?? "",
+    RIDER_LABEL: label ?? "",
   };
 }
 export function writeLog(paths, name, data) { const p = join(paths.logs, name); writeJsonAtomic(p, data); return p; }
