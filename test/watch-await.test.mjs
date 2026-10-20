@@ -6,7 +6,8 @@ import { join } from "node:path";
 import { pollAwait } from "../scripts/lib/await.mjs";
 import { currentKey } from "../scripts/lib/keys.mjs";
 import { sh } from "../scripts/lib/shell.mjs";
-import { next, start } from "../scripts/lib/verbs.mjs";
+import { render } from "../scripts/lib/render.mjs";
+import { next, start, status } from "../scripts/lib/verbs.mjs";
 import { awaitEvent, watchLoop } from "../scripts/lib/watch.mjs";
 import { FakeBinding } from "./fake-binding.mjs";
 import { AWAIT_PROMPTS, AWAIT_RIDER_MD, FakeClock, makeCtx, tmpProject, wake } from "./helpers.mjs";
@@ -107,6 +108,25 @@ test("three errors in a row wake the judge once, a 75 ends the streak, and a lat
     [0, null, false], [1, at(5), false], [2, at(5), false], [3, at(5), true],
   ]);
   assert.deepEqual(w.clock.slept, Array(8).fill(60_000), "a failing check keeps polling at the phase's interval");
+  // A 0 ends the streak as a 75 does (§7.2): a wait that passed is never reported as failing.
+  const wait = waitOf(w.ctx);
+  assert.deepEqual([wait.outcome, wait.failures, wait.failingSince, wait.failingEmitted], ["ready", 0, null, false]);
+  const st = status(w.ctx);
+  assert.deepEqual([st.outcome, st.wait.failures, st.wait.failing], ["ready", 0, false]);
+  assert.doesNotMatch(render("status", st), /check failing/);
+});
+
+test("a wait that times out mid-streak keeps its streak but is not reported as failing", (t) => {
+  const w = project(t, { md: AWAIT_RIDER_MD.replace("timeoutHours: 2", "timeoutHours: 0.05"), answers: [{ status: 1, output: "boom" }] });
+  const { key } = start(w.ctx, { phase: "wait" });
+  assert.equal(watchLoop(w.ctx, w.opts).state, "timed-out");
+  assert.deepEqual(wake(w.ctx).map((e) => [e.kind, e.key, e.at]), [["check-failing", key, at(2)], ["timed-out", key, at(3)]]);
+  // The record keeps what the wait went through; check-failing is an awaiting wait at the threshold (§7.5, §7.8), and this one is over.
+  const wait = waitOf(w.ctx);
+  assert.deepEqual([wait.outcome, wait.failures, wait.failingSince, wait.failingEmitted], ["timed-out", 4, at(0), true]);
+  const st = status(w.ctx);
+  assert.deepEqual([st.state, st.outcome, st.wait.failures, st.wait.failing], ["finished", "timed-out", 4, false]);
+  assert.doesNotMatch(render("status", st), /check failing/);
 });
 
 test("a timeout counts as an error", (t) => {

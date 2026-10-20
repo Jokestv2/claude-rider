@@ -38,16 +38,17 @@ export function pollAwait(ctx, { threshold }) {
     const at = now.toISOString();
     const event = (kind, text) => ctx.event(kind, { runId: run.runId, phase: run.phase, key, text });
     Object.assign(w, { polls: (w.polls ?? 0) + 1, lastPollAt: at, lastExit: r.status, lastError: r.timedOut ? `timed out after ${def.checkTimeoutSeconds} s` : r.error ?? null, lastOutput: r.output ?? "" });
-    // A check cut off at its cap answered nothing, whatever its shell's status: a timeout is an error (§7.3).
-    if (!r.timedOut && r.status === READY) {
+    // A check cut off at its cap answered nothing, whatever its shell's status: a timeout is an error (§7.3). A 0 or a 75
+    // is an answer, and ends any failing streak (§7.2).
+    const answered = !r.timedOut && (r.status === READY || r.status === NOT_YET);
+    if (answered) Object.assign(w, { failures: 0, failingSince: null, failingEmitted: false });
+    if (answered && r.status === READY) {
       Object.assign(w, { outcome: "ready", readyAt: at });
       event("ready", firstLine(w.lastOutput) || "check passed");
-    } else if (!r.timedOut && r.status === NOT_YET) {
-      Object.assign(w, { failures: 0, failingSince: null, failingEmitted: false });
-    } else {
+    } else if (!answered) {
       w.failures = (w.failures ?? 0) + 1;
       w.failingSince ??= at;
-      // One wake per streak, and the watcher keeps polling: a 75 ends the streak, a 0 the wait.
+      // One wake per streak, and the watcher keeps polling until a 0 or a 75 ends it.
       if (w.failures >= threshold && !w.failingEmitted) {
         w.failingEmitted = true;
         event("check-failing", `exit ${r.status}, ${w.failures} in a row: ${firstLine(w.lastOutput) || w.lastError || "no output"}`);

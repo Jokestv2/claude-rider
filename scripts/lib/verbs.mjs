@@ -322,8 +322,9 @@ export function status(ctx) {
 }
 
 /** What status shows of a wait: the stored poll, never a new one. A failing check is no state of its own: an awaiting
- *  wait whose errors in a row reached `local.json`'s threshold (§7.5). */
-const waitReadout = (ctx, w) => ({ check: w.check, at: w.at, polls: w.polls, lastPollAt: w.lastPollAt, lastExit: w.lastExit, lastError: w.lastError, failures: w.failures, failing: w.failures >= ctx.local.awaitCheckFailures, failingSince: w.failingSince, deadline: w.deadline, readyAt: w.readyAt, timedOutAt: w.timedOutAt });
+ *  wait whose errors in a row reached `local.json`'s threshold (§7.5, §7.8). A wait that timed out mid-streak keeps its
+ *  count, but is finished: the judge decides it like any other. */
+const waitReadout = (ctx, w) => ({ check: w.check, at: w.at, polls: w.polls, lastPollAt: w.lastPollAt, lastExit: w.lastExit, lastError: w.lastError, failures: w.failures, failing: w.outcome === "awaiting" && w.failures >= ctx.local.awaitCheckFailures, failingSince: w.failingSince, deadline: w.deadline, readyAt: w.readyAt, timedOutAt: w.timedOutAt });
 
 /** A note lands on the active run, or on the last ended one: what the operator found at the gate is
  *  usually said after the merge, and the merge is what ended the run. */
