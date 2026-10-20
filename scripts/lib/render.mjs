@@ -1,6 +1,7 @@
 // scripts/lib/render.mjs
 import { nowLine } from "./keys.mjs";
 import { fmtCost, fmtDuration, formatFinal, formatQuestion } from "./markers.mjs";
+import { REQUIRES_CAP } from "./preflight.mjs";
 
 const RULE = (title) => `── ${title} ${"─".repeat(Math.max(4, 60 - title.length))}`;
 /** Who a status or check block is about, in the one form event lines and session names use: rider/instance/runId. */
@@ -8,6 +9,15 @@ const whose = (r) => `rider ${r.rider}/${r.instance ?? "?"}${r.runId ? `/${r.run
 /** Branch drift (§11.1), as status and check print it. The tree is every instance's, so it is relayed, never fixed here. */
 const driftLine = (r) => `drift: the shared working tree left ${r.baseBranch ?? "?"} for ${r.branchDrift.branch} (first seen ${r.branchDrift.at}) — the executor does not switch back`;
 const labelText = (l) => (l.label === "resume" || l.label === "operator" ? l.label : `${l.label} → ${l.to}`);
+/** One edge's preconditions as `check` found them (§5.3). A timeout names itself, since its exit and its empty output
+ *  would hide the cause; a failure that printed nothing leaves no dangling colon. */
+function requiresEntry(e) {
+  if (e.ok) return `${e.label} → ${e.to} ✓`;
+  const why = e.timedOut ? `(exit -1: timed out after ${REQUIRES_CAP.timeoutMs / 1000} s)` : `(exit ${e.status})${e.firstLine ? `: ${e.firstLine}` : ""}`;
+  return `${e.label} → ${e.to} ✗ ${e.cmd} ${why}`;
+}
+/** Printed right above `decide with:`, so the judge reads which labels `next` would refuse before it copies one. */
+const requiresLine = (entries) => `── requires ── ${entries.map(requiresEntry).join(" · ")}`;
 
 /** One event, one line: `<at> <kind> <rider>/<instance>/<runId> <phase> <key> <text>`, with absent fields left out. */
 export function eventLine(e) {
@@ -162,6 +172,7 @@ export function renderCheck(r) {
     }
   }
   L.push(`── legal labels: ${r.labels.map(labelText).join(" · ")}`);
+  if (r.requires) L.push(requiresLine(r.requires));
   if (r.decideWith) L.push(r.decideWith);
   return L.join("\n");
 }

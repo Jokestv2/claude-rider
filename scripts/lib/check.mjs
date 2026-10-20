@@ -1,6 +1,7 @@
 // scripts/lib/check.mjs
 import { decideWithLine } from "./keys.mjs";
 import { signedOff, statusHint, waitingIsDone } from "./markers.mjs";
+import { edgePreflight } from "./preflight.mjs";
 import { legalLabels } from "./rider-md.mjs";
 import { sh } from "./shell.mjs";
 import { chainCost, chainResumes, currentSession, keyOf, totalCost } from "./state.mjs";
@@ -34,7 +35,8 @@ export function check(ctx, { readouts: withReadouts = true } = {}) {
 }
 
 /** What informs the judge but decides nothing runs after the lock is released, against the state just committed (§7.1):
- *  a stopped or waiting session's evidence, and a human phase's show. Each command may take seconds; no writer waits on them. */
+ *  a stopped or waiting session's evidence, a human phase's show, and a decidable block's requires. Each command may
+ *  take seconds; no writer waits on them. */
 export function readouts(ctx, r) {
   const run = r?.[RUN];
   if (!run) return r;
@@ -42,7 +44,30 @@ export function readouts(ctx, r) {
     const show = ctx.rider.phases[r.phase]?.show;
     r.show = show ? sh(show, ctx.shellOpts(run)).output : null;
   } else if (r.session && r.state !== "running") r.evidence = runEvidence(ctx, run);
+  if (r.decideWith) annotateRequires(ctx, run, r);
   return r;
+}
+
+/** A refusal the judge could not have predicted costs a turn (§5.3): a block with a decide-with line runs each edge
+ *  target's `requires`, once per label and as `next` would, and marks the labels they would refuse. Information, never
+ *  a refusal: `next` runs them again and decides. A block whose edges lead to no `requires` is left as it was. */
+function annotateRequires(ctx, run, r) {
+  const edges = ctx.rider.phases[run.phase]?.edges ?? {};
+  if (!Object.values(edges).some((to) => ctx.rider.phases[to]?.requires?.length)) return;
+  // `edgePreflight` resolves each target, and sets each command's environment, as `next` would; it skips `operator`.
+  const ran = Object.keys(edges).map((label) => edgePreflight(ctx, run, { on: r.key, label })).filter(Boolean);
+  r.requires = ran.map(({ label, to, result: x }) => (x.ok
+    ? { label, to, ok: true, cmd: null, status: null, firstLine: null }
+    : { label, to, ok: false, cmd: x.cmd, status: x.status, firstLine: firstLine(x.output), ...(x.timedOut ? { timedOut: true } : {}) }));
+  r.decideWith = decideWithFor(ctx, r.key, r.labels.map((l) => l.label), r.requires.filter((e) => !e.ok).map((e) => e.label));
+}
+
+/** The first non-empty line of a command's output, trimmed: what one entry of the requires line has room for. */
+const firstLine = (text) => String(text ?? "").split("\n").map((l) => l.trim()).find(Boolean) ?? "";
+
+/** The decide-with line for `key`, in one place: `result` builds it, and the requires annotation rebuilds it marked. */
+function decideWithFor(ctx, key, labels, failing = []) {
+  return decideWithLine({ rider: ctx.rider.name, multiRider: ctx.riderCount > 1, instance: ctx.instance.id, declared: !!ctx.instance.declared, key, labels, failing });
 }
 
 function classify(ctx) {
@@ -267,7 +292,7 @@ function result(ctx, run, sess, outcome, finalText, note = null) {
     question: sess.question ?? null, finalText,
     evidence: [], // `readouts` fills it once the lock is released
     labels, log: sess.log ?? null,
-    decideWith: DECIDABLE.has(state) ? decideWithLine({ rider: ctx.rider.name, multiRider: ctx.riderCount > 1, instance: ctx.instance.id, declared: !!ctx.instance.declared, key, labels: labels.map((l) => l.label) }) : null,
+    decideWith: DECIDABLE.has(state) ? decideWithFor(ctx, key, labels.map((l) => l.label)) : null,
     [RUN]: run,
   };
 }

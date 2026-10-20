@@ -1,6 +1,7 @@
 // test/render.test.mjs
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { decideWithLine } from "../scripts/lib/keys.mjs";
 import { eventLine, render, renderCheck } from "../scripts/lib/render.mjs";
 
 const done = {
@@ -118,4 +119,30 @@ test("an event renders as one line: at, kind, rider/instance/runId, phase, key, 
   assert.equal(render("await", { ok: true, state: "event", events: [e, { ...e, kind: "gone", text: "" }] }), `${eventLine(e)}\n2026-10-19T12:00:00.000Z gone lemmaria/default/3f2a build 3f2a.2`);
   const status = { rider: "lemmaria", instance: "default", runId: "3f2a", phase: "build", visits: { build: 1 }, startedAt: e.at, state: "finished", watcher: null, sessions: [], totalCost: 0, baseBranch: "main", lastEvent: e };
   assert.match(render("status", status), new RegExp(`last event: ${eventLine(e)}\n`));
+});
+
+test("the requires line and the marked tail", () => {
+  const decideWith = decideWithLine({ rider: "lemmaria", multiRider: false, instance: "a", declared: true, key: "3f2a.2", labels: ["code green", "redo", "blocked", "resume", "operator"], failing: ["code green"] });
+  assert.equal(decideWith, 'decide with:  rider next <label> --instance a --on 3f2a.2 --because "…"     (labels: code green ✗ · redo · blocked · resume · operator)');
+  const requires = [
+    { label: "code green", to: "close", ok: false, cmd: "tool budget --ok", status: 1, firstLine: "3.2 of 3.0 units spent" },
+    { label: "redo", to: "plan", ok: true, cmd: null, status: null, firstLine: null },
+  ];
+  const labels = [{ label: "code green", to: "close" }, { label: "redo", to: "plan" }, ...done.labels.slice(1)];
+  const lines = renderCheck({ ...done, labels, requires, decideWith }).split("\n");
+  // After the legal labels and right before `decide with:`, the line the judge copies from.
+  assert.equal(lines.at(-3), "── legal labels: code green → close · redo → plan · blocked → operator · resume · operator");
+  assert.equal(lines.at(-2), "── requires ── code green → close ✗ tool budget --ok (exit 1): 3.2 of 3.0 units spent · redo → plan ✓");
+  assert.equal(lines.at(-1), decideWith);
+  // A failure that printed nothing leaves no dangling colon.
+  const silent = [{ label: "code green", to: "close", ok: false, cmd: "test -f ok.flag", status: 1, firstLine: "" }];
+  assert.equal(renderCheck({ ...done, requires: silent, decideWith }).split("\n").at(-2), "── requires ── code green → close ✗ test -f ok.flag (exit 1)");
+  // No annotation, no line.
+  assert.doesNotMatch(renderCheck({ ...done, decideWith }), /── requires ──/);
+});
+
+test("a requires that timed out says so in the requires line", () => {
+  const requires = [{ label: "code green", to: "close", ok: false, cmd: "tool budget --ok", status: -1, firstLine: "", timedOut: true }];
+  const lines = renderCheck({ ...done, requires, decideWith: "decide with: …" }).split("\n");
+  assert.equal(lines.at(-2), "── requires ── code green → close ✗ tool budget --ok (exit -1: timed out after 10 s)");
 });

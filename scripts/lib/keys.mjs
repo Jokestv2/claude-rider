@@ -49,8 +49,10 @@ export function targetFlags({ rider, multiRider, instance, declared }) {
 }
 
 /** The command `check` prints for the judge to copy (§8): a key assembled by hand is how a stale one gets typed. It
- *  names the rider and the instance whenever the CLI would need them, so it runs as printed. */
-export function decideWithLine({ rider, multiRider, instance, declared, key, labels }) {
+ *  names the rider and the instance whenever the CLI would need them, so it runs as printed. A label in `failing` is
+ *  marked ✗: its target's `requires` failed when `check` ran them (§5.3), so `next` would refuse it as things stand. */
+export function decideWithLine({ rider, multiRider, instance, declared, key, labels, failing = [] }) {
   const flags = targetFlags({ rider, multiRider, instance, declared });
-  return `decide with:  rider next <label>${flags ? ` ${flags}` : ""} --on ${key} --because "…"     (labels: ${labels.join(" · ")})`;
+  const tail = labels.map((l) => (failing.includes(l) ? `${l} ✗` : l)).join(" · ");
+  return `decide with:  rider next <label>${flags ? ` ${flags}` : ""} --on ${key} --because "…"     (labels: ${tail})`;
 }

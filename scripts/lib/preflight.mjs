@@ -7,16 +7,17 @@ export const REQUIRES_CAP = { timeoutMs: 10_000, capBytes: 2048 };
 
 /** The target's entry preconditions (§5.1), in order, stopping at the first that fails. Run before the verb takes the
  *  lock, so a slow one never holds it; the hold re-validates what they were computed for, never their answer. Besides
- *  `error`, a failure names its `cmd`, `status` and `output`, for a readout that shows them apart. `local.requiresTimeoutMs`
- *  lowers the timeout for the tests only: it is no setting. */
+ *  `error`, a failure names its `cmd`, `status`, `output` and whether it `timedOut`, for a readout that shows them
+ *  apart. `local.requiresTimeoutMs` lowers the timeout for the tests only: it is no setting. */
 export function requiresFor(ctx, { run, to, from = "", label = "" }) {
   const timeoutMs = ctx.local?.requiresTimeoutMs ?? REQUIRES_CAP.timeoutMs;
   for (const cmd of ctx.rider.phases[to]?.requires ?? []) {
     const r = sh(cmd, { ...ctx.shellOpts(run, { phase: to, fromPhase: from, label }), timeoutMs, capBytes: REQUIRES_CAP.capBytes });
     if (r.status === 0) continue;
     // `sh` reads a timeout as exit -1, as it does a spawn failure; only its error says which.
-    const exit = /\bETIMEDOUT\b/.test(r.error ?? "") ? `exit -1: timed out after ${timeoutMs / 1000} s` : `exit ${r.status}`;
-    return { ok: false, cause: "requires", error: `requires check failed for ${to} (${exit}): ${cmd}${r.output ? `\n${r.output}` : ""}`, cmd, status: r.status, output: r.output };
+    const timedOut = /\bETIMEDOUT\b/.test(r.error ?? "");
+    const exit = timedOut ? `exit -1: timed out after ${timeoutMs / 1000} s` : `exit ${r.status}`;
+    return { ok: false, cause: "requires", error: `requires check failed for ${to} (${exit}): ${cmd}${r.output ? `\n${r.output}` : ""}`, cmd, status: r.status, output: r.output, timedOut };
   }
   return { ok: true };
 }

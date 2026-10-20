@@ -1,14 +1,14 @@
 // test/check.test.mjs
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { writeFileSync } from "node:fs";
+import { existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { RESUME_NUDGE } from "../scripts/bindings/claude-code.mjs";
 import { check } from "../scripts/lib/check.mjs";
 import { renderCheck } from "../scripts/lib/render.mjs";
 import { next, resume, start } from "../scripts/lib/verbs.mjs";
 import { FakeBinding } from "./fake-binding.mjs";
-import { FakeClock, makeCtx, save, settled, tmpProject } from "./helpers.mjs";
+import { FakeClock, REQUIRES_RIDER_MD, TEST_RIDER_MD, makeCtx, requiring, save, settled, tmpProject } from "./helpers.mjs";
 
 const GREEN = "Plan is committed.\nSTATUS: planned\n<promise>MILESTONE PLANNED</promise>";
 function setup(script, extra = {}) {
@@ -394,4 +394,75 @@ test("the work tip travels with the work branch, follows it at the human phase, 
     assert.deepEqual(asked, [["aaa1", "main"]], "read from the base once the branch is gone");
     assert.deepEqual(ended.handoff.after, { ref: "main", commits: ["bbb2 fix: found while driving scenario 3"] });
   } finally { p.cleanup(); }
+});
+
+/** Plan's stretch on `riderMd`, scripted as `statuses` and not yet checked; plan has no requires of its own. */
+function planOn(t, riderMd, { statuses = ["done"], local = {} } = {}) {
+  const p = tmpProject({ riderMd });
+  t.after(p.cleanup);
+  const ctx = makeCtx({ root: p.root, binding: new FakeBinding({ script: [{ statuses, read: { lastText: GREEN, turns: 5 } }] }), local });
+  start(ctx);
+  return { ctx, flag: (name) => join(p.root, name) };
+}
+
+test("a decidable block annotates labels whose target's requires fails", (t) => {
+  const { ctx, flag } = planOn(t, REQUIRES_RIDER_MD);
+  const r = check(ctx);
+  assert.equal(r.state, "done");
+  assert.deepEqual(r.requires, [{ label: "planned", to: "build", ok: false, cmd: "test -f ok.flag", status: 1, firstLine: "" }]);
+  assert.match(r.decideWith, /--on [0-9a-f]{4}\.1 --because "…" {5}\(labels: planned ✗ · blocked · resume · operator\)$/);
+  // Information, never a refusal (§5.3): the next check reads the condition as it is then.
+  writeFileSync(flag("ok.flag"), "");
+  const again = check(ctx);
+  assert.deepEqual(again.requires, [{ label: "planned", to: "build", ok: true, cmd: null, status: null, firstLine: null }]);
+  assert.match(again.decideWith, /\(labels: planned · blocked · resume · operator\)$/);
+});
+
+test("every edge to a phase gets an entry, in the order declared, with the first line of a failure's output", (t) => {
+  const md = requiring("build", ["test -d riders", "echo over budget; echo detail; exit 3"], TEST_RIDER_MD.replace("edges: { planned: build, blocked: operator }", "edges: { planned: build, skip: close, blocked: operator }"));
+  const { ctx } = planOn(t, md);
+  const r = check(ctx);
+  assert.deepEqual(r.requires, [
+    { label: "planned", to: "build", ok: false, cmd: "echo over budget; echo detail; exit 3", status: 3, firstLine: "over budget" },
+    { label: "skip", to: "close", ok: true, cmd: null, status: null, firstLine: null },
+  ]);
+  assert.match(r.decideWith, /\(labels: planned ✗ · skip · blocked · resume · operator\)$/);
+});
+
+test("a rider with no requires on any edge's target gets no annotation", (t) => {
+  const { ctx } = planOn(t, TEST_RIDER_MD);
+  const r = check(ctx);
+  assert.equal(r.state, "done");
+  assert.equal("requires" in r, false);
+  assert.match(r.decideWith, /\(labels: planned · blocked · resume · operator\)$/);
+});
+
+test("a running stretch runs no requires", (t) => {
+  const { ctx, flag } = planOn(t, requiring("build", ["touch ran.flag"]), { statuses: ["running"] });
+  const r = check(ctx);
+  assert.equal(r.state, "running");
+  assert.equal("requires" in r, false);
+  assert.equal(existsSync(flag("ran.flag")), false);
+});
+
+test("the watcher's check runs no requires; the judge's does", (t) => {
+  const { ctx, flag } = planOn(t, requiring("build", ["touch ran.flag"]));
+  const w = check(ctx, { readouts: false });
+  assert.equal(w.state, "done");
+  assert.equal("requires" in w, false);
+  assert.equal(existsSync(flag("ran.flag")), false, "readouts: false runs none of it (§5.3)");
+  assert.deepEqual(check(ctx).requires, [{ label: "planned", to: "build", ok: true, cmd: null, status: null, firstLine: null }]);
+  assert.equal(existsSync(flag("ran.flag")), true);
+});
+
+test("the requires readout runs after the lock is released", (t) => {
+  // Inside the hold the lock file exists, so this requirement would fail there.
+  const { ctx } = planOn(t, requiring("build", ["test ! -e .rider/lemmaria/default/lock"]));
+  assert.equal(check(ctx).requires[0].ok, true);
+});
+
+test("a requires that hangs reads timed out in the readout", (t) => {
+  // The cap is lowered for the test only; `sleep 3` keeps the orphan a timed-out shell leaves short.
+  const { ctx } = planOn(t, requiring("build", ["sleep 3"]), { local: { requiresTimeoutMs: 300 } });
+  assert.deepEqual(check(ctx).requires, [{ label: "planned", to: "build", ok: false, cmd: "sleep 3", status: -1, firstLine: "", timedOut: true }]);
 });

@@ -217,6 +217,7 @@ test("requires runs in order and stops at the first that fails", (t) => {
 
 test("requires sees the target, the phase left, the label, the instance and the scope", (t) => {
   const { ctx, key, flag } = planDone(t, { riderMd: requiring("build", ["env > seen.env"], INSTANCE_RIDER_MD), instance: "a", instances: ["a"] });
+  rmSync(flag("seen.env")); // the check that found plan done wrote it, as its requires readout (§5.3): only next's may count
   const runId = ctx.loadRun().runId;
   assert.equal(next(ctx, "planned", { on: key }).state, "running");
   const env = Object.fromEntries(readFileSync(flag("seen.env"), "utf8").split("\n").filter((l) => l.startsWith("RIDER_")).map((l) => l.split(/=(.*)/s).slice(0, 2)));
@@ -235,6 +236,7 @@ test("a stale key with a failing requires is refused as stale", (t) => {
   const { ctx, key, launches, flag } = planDone(t, { riderMd: requiring("build", ["touch ran.flag", "test -f ok.flag"]) });
   const resumed = next(ctx, "resume", { on: key, because: "one more pass" });
   assert.equal(resumed.state, "running");
+  rmSync(flag("ran.flag")); // the check that found plan done ran it, as its requires readout (§5.3)
   const latest = status(ctx).key;
   const before = snapshotOf(ctx);
   const r = next(ctx, "planned", { on: key });
