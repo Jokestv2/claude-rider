@@ -140,6 +140,17 @@ for (const id of launched) for (const verb of ["stop", "rm"]) spawnSync(CLAUDE, 
 // a watcher may still be polling from inside its root; give the watchers one tick to exit before their cwd is removed
 const pids = [paths.pid, ...INSTANCES.map((id) => instanceFile(root2, "pair", id, "watch.pid"))];
 for (let i = 0; i < 7 && !pids.every(pidDead); i++) sleepSync(5000);
+// One still alive is in a wait (a rate-limit reset, a session the stop above left listed): at the reset it would resume a
+// session this cleanup stopped, and pay with nothing tracking it. SIGTERM, then SIGKILL after a short grace.
+for (const file of pids) {
+  if (pidDead(file)) continue;
+  const pid = Number(readFileSync(file, "utf8"));
+  let signal = "SIGTERM";
+  try { process.kill(pid, signal); } catch { continue; }
+  for (let i = 0; i < 10 && isAlive(pid); i++) sleepSync(500);
+  if (isAlive(pid)) { signal = "SIGKILL"; try { process.kill(pid, signal); } catch { /* exited meanwhile */ } }
+  console.log(`killed watcher pid ${pid} (${signal}), still alive after the wait: ${file}`);
+}
 console.log(fails ? `smoke: ${fails} FAILED  (state kept at ${root} and ${root2})` : "smoke: PASS");
 if (!fails) for (const dir of [root, root2]) { try { rmSync(dir, { recursive: true, force: true }); } catch (e) { console.log(`(could not remove ${dir}: ${e.message})`); } }
 process.exit(fails ? 1 : 0);
