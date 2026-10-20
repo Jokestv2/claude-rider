@@ -42,9 +42,11 @@ export function validateRider(data, promptExists) {
   for (const r of RESERVED) if (names.includes(r)) e.push(`phases.${r}: reserved name`);
   // A phase name becomes a path segment (the harvest log's file name) and a token on the event line.
   for (const n of names) if (!/^[A-Za-z0-9_-]+$/.test(n)) e.push(`phases.${n}: name must be letters, digits, underscores and dashes`);
+  // `start:` is the canonical entry, so it names a session phase; `locate` may still name a gate (§6.2).
   if (typeof data.start !== "string") e.push("start: required");
   else if (!names.includes(data.start)) e.push(`start: "${data.start}" is not a declared phase`);
   else if (phases[data.start]?.human === true) e.push(`start: "${data.start}" is a human phase`);
+  if (data.locate != null && (typeof data.locate !== "string" || !data.locate.trim())) e.push("locate: must be one non-empty shell command");
   for (const [name, p] of Object.entries(phases)) {
     if (!p || typeof p !== "object" || Array.isArray(p)) { e.push(`phases.${name}: not a mapping`); continue; }
     if (p.human === true) {
@@ -93,7 +95,7 @@ function normalize(data, dir, body) {
       : { kind: "session", prompt: join(dir, typeof p.prompt === "string" ? p.prompt : `${name}.md`), model: p.model, edges: { ...p.edges }, requires: [...(p.requires ?? [])] };
   }
   return {
-    name: data.name, dir, start: data.start, phases, instances: data.instances ?? null,
+    name: data.name, dir, start: data.start, locate: data.locate ?? null, phases, instances: data.instances ?? null,
     intake: data.intake ?? [], evidence: data.evidence ?? [],
     limits: { visits: data.limits?.visits ?? DEFAULT_VISITS },
     body,

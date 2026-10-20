@@ -68,6 +68,23 @@ test("on a shared branch, handoff.after counts only commits under the instance's
   } finally { p.cleanup(); }
 });
 
+test("a run started at the gate computes no handoff.after when its check passes", () => {
+  // §6.2: no session called the phase finished, so the operator's own commits at the gate are charged against no claim.
+  const p = sharedBranch();
+  try {
+    const a = on(p, "a", []);
+    const r = start(a, { phase: "merge" });
+    assert.equal(r.state, "human");
+    assert.equal(a.loadRun().handoff, null);
+    p.commit("nodes/a/x", "fix: the operator's own");
+    writeFileSync(join(p.root, "nodes", "a", "merged.flag"), "");
+    assert.equal(check(a).state, "none");
+    const ended = a.lastEndedRun();
+    assert.equal(ended.endedBy, "done");
+    assert.equal(ended.handoff, null, "no handoff, so no handoff.after");
+  } finally { p.cleanup(); }
+});
+
 test("an instance rider never records a work branch; a branch switch is drift on every live run", () => {
   const p = sharedBranch();
   const clock = new FakeClock();
@@ -161,8 +178,11 @@ test("status and check show a recorded drift, in JSON and text, and none once a 
     assert.ok(render("status", st).split("\n").includes(line), render("status", st));
     assert.doesNotMatch(render("status", st), /· branch main ·/, "the tree is not on main: the headline names it the base");
 
-    // At a human phase, the block a stale drift matters most in: nothing else checks the tree there.
-    assert.equal(next(a, "gate green", { on: stopped.key }).state, "human");
+    // At a human phase, the block a stale drift matters most in: nothing else checks the tree there. The block printed
+    // on entering it says so too, as `check`'s does.
+    const entered = next(a, "gate green", { on: stopped.key });
+    assert.deepEqual([entered.state, entered.baseBranch, entered.branchDrift], ["human", "main", drift]);
+    assert.ok(render("next", entered).split("\n").includes(line), render("next", entered));
     const human = check(a);
     assert.deepEqual([human.state, human.branchDrift], ["human", drift]);
     assert.ok(render("check", human).split("\n").includes(line), render("check", human));

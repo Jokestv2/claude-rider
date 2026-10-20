@@ -19,6 +19,15 @@ function requiresEntry(e) {
 /** Printed right above `decide with:`, so the judge reads which labels `next` would refuse before it copies one. */
 const requiresLine = (entries) => `── requires ── ${entries.map(requiresEntry).join(" · ")}`;
 
+/** What a dry run would do (§6.2): the launch argv, or at a gate the check it would wait on. */
+function dryRunLine(r) {
+  if (r.argv) return `[dry-run] ${r.phase} (${r.model}): ${r.argv.map((a) => (/\s/.test(a) ? JSON.stringify(a.length > 60 ? `${a.slice(0, 57)}…` : a) : a)).join(" ")}`;
+  return r.human ? `[dry-run] ${r.phase} (human): ${r.check}` : `[dry-run] ${r.phase ?? r.to}`;
+}
+/** `start`'s own lines (§6.2): above its result, the `locate` the operator's word overrode. A check result's `note` is
+ *  the classification's, and its block prints it in place. */
+const startNote = (verb, r, text) => (verb === "start" && r.note ? `note: ${r.note}\n${text}` : text);
+
 /** One event, one line: `<at> <kind> <rider>/<instance>/<runId> <phase> <key> <text>`, with absent fields left out. */
 export function eventLine(e) {
   return [e.at, e.kind, `${e.rider}/${e.instance}/${e.runId ?? "?"}`, e.phase, e.key, e.text].filter((f) => f != null && f !== "").join(" ").replace(/\r?\n/g, " ");
@@ -31,22 +40,23 @@ export function render(verb, r) {
   if (verb === "board") return renderBoard(r);
   switch (r?.state) {
     case "none": return renderNone(r);
-    case "human": return renderHuman(r);
-    case "dry-run": return r.argv ? `[dry-run] ${r.phase} (${r.model}): ${r.argv.map((a) => (/\s/.test(a) ? JSON.stringify(a.length > 60 ? `${a.slice(0, 57)}…` : a) : a)).join(" ")}` : `[dry-run] ${r.phase ?? r.to}`;
+    case "human": return startNote(verb, r, renderHuman(r));
+    case "dry-run": return startNote(verb, r, r.entry ? `${dryRunLine(r)}\nentry: ${r.entry.phase} by ${r.entry.by}` : dryRunLine(r));
     case "operator": return [`run ${r.runId} stopped at operator: ${r.reason}`, `total cost: ${fmtCost(r.totalCost ?? 0)}`, "the operator directs what happens next:", ...operatorMoves(r.overrulable, r.runId, r.targetFlags)].join("\n");
     case "noted": return `noted (${r.notes} notes on ${r.ended ? "ended " : ""}run ${r.runId})`;
     case "event": return r.events.length ? r.events.map(eventLine).join("\n") : `no new event: ${r.reason}`;
     case "timeout": return `no event in ${r.minutes} min; the phase is still running — re-arm rider await`;
     default: break;
   }
-  if (verb === "start" || verb === "next" || verb === "resume" || verb === "overrule") return `${r.phase} started as ${r.model}: ${r.session.shortId}  (${r.attach})${r.resumed ? `  resumed ${r.resumed}` : ""}\nvisit ${r.visit ?? "?"} of run ${r.runId}`;
+  if (verb === "start" || verb === "next" || verb === "resume" || verb === "overrule") return startNote(verb, r, `${r.phase} started as ${r.model}: ${r.session.shortId}  (${r.attach})${r.resumed ? `  resumed ${r.resumed}` : ""}\nvisit ${r.visit ?? "?"} of run ${r.runId}`);
   return renderCheck(r);
 }
 
 /** Everything the operator can do after an `operator` stop, spelled as commands that exist: a judge
  *  left to describe the way out invents one (842b's told the operator to `rider start merge`, which the
- *  executor refuses). `labels` is what `overrule` would accept — empty when the executor made the stop.
- *  `flags` are the verb's `--rider`/`--instance` (`targetFlags`), so every move runs as printed. */
+ *  executor refused; it now starts a fresh run at the gate, not this one). `labels` is what `overrule`
+ *  would accept — empty when the executor made the stop. `flags` are the verb's `--rider`/`--instance`
+ *  (`targetFlags`), so every move runs as printed. */
 function operatorMoves(labels, runId, flags = "") {
   const moves = [];
   if (labels?.length) moves.push([`rider overrule "<label>"${flags ? ` ${flags}` : ""} --because "…" --on ${runId}`, `the phase's outcome stands after all: revive this run and take that edge (${labels.join(" · ")})`]);

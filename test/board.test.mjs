@@ -155,6 +155,15 @@ test("staleDecisionMinutes in local.json moves the line", (t) => {
   assert.equal(rows.edge.category, "needs its judge");
 });
 
+test("a run started at a gate is dated from its start", (t) => {
+  // §6.2: such a run records no handoff, since no session handed anything over.
+  const gate = active([], { phase: "merge", visits: { merge: 1 }, transitions: [], handoff: null, entry: { by: "locate", located: "merge", phase: "merge" } });
+  const p = everyCase(t, { gate: { run: gate }, handed: CASES.human });
+  const rows = byInstance(collectBoard(p.root, { now: NOW, alive }));
+  assert.deepEqual([rows.gate.category, rows.gate.waitsOn, rows.gate.since], ["needs you", "human check: test -f merged.flag", ago(120)]);
+  assert.equal(rows.handed.since, ago(30), "a run that reached the gate from a session is still dated from the handoff");
+});
+
 test("a stopped stretch with no stoppedAt is aged from its start", (t) => {
   const p = tmpProject({ riderMd: INSTANCE_RIDER_MD, instances: ["old", "young"] });
   t.after(p.cleanup);

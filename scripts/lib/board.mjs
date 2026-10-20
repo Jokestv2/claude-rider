@@ -46,7 +46,8 @@ function ownCategory(state, rider, { now, staleMs, watcherAlive: live }) {
   }
   const key = currentKey(run);
   const def = rider.phases[run.phase];
-  if (def?.kind === "human") return row("needs you", `human check: ${def.check}`, run.handoff?.at, key);
+  // A run that started at the gate records no handoff (§6.2): it has waited on the operator since it started.
+  if (def?.kind === "human") return row("needs you", `human check: ${def.check}`, run.handoff?.at ?? run.startedAt, key);
   const sess = currentSession(run);
   if (!sess) return row("needs you", `no session for phase ${run.phase}`, run.transitions.at(-1)?.at ?? run.startedAt, key);
   // Stopped at: a crash between classification and harvest leaves an outcome with no stop time (Review Focus 4).

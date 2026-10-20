@@ -1,10 +1,10 @@
 // scripts/lib/verbs.mjs
 import { readFileSync } from "node:fs";
-import { RUN, readouts } from "./check.mjs";
+import { RUN, driftOf, readouts } from "./check.mjs";
 import { currentKey, nowLine, parseRunKey, parseStretchKey, snapshot, targetFlags } from "./keys.mjs";
 import { edgePreflight, startPreflight } from "./preflight.mjs";
 import { legalLabels, onwardEdges, overrulable } from "./rider-md.mjs";
-import { awaitsReset, currentSession, keyOf, newRun, scopeOf, totalCost } from "./state.mjs";
+import { awaitsReset, currentSession, hasSessionStretch, keyOf, newRun, scopeOf, totalCost } from "./state.mjs";
 
 /** `cause` names the entry command that refused (§4), as the `refused` event records it; a usage error has none. */
 export function refuse(error, cause = null) { return { ok: false, error, ...(cause ? { cause } : {}) }; }
@@ -82,9 +82,10 @@ function requiresRefusal(ctx, pre, { run, to, on, by, dryRun }) {
   return refuse(pre.result.error, "requires");
 }
 
-/** A fresh run: the pre-flight before the lock (§4), then, in the hold, the run record and the start phase. An active
+/** A fresh run: the pre-flight before the lock (§4), then, in the hold, the run record and its first phase. An active
  *  run is refused before any entry command runs, and again in the hold, since one may have started meanwhile. A refused
- *  entry command is recorded as `refused`, with no state write; a dry run records nothing. */
+ *  entry command is recorded as `refused`, with no state write; a dry run records nothing. `by` is who sent the verb,
+ *  for its events; how the phase was chosen is the pre-flight's `entry`, never derived from it. */
 export function start(ctx, { phase = null, dryRun = false, by = "judge" } = {}) {
   const early = ctx.loadRun();
   if (early) return activeRefusal(early);
@@ -96,10 +97,17 @@ export function start(ctx, { phase = null, dryRun = false, by = "judge" } = {}) 
       if (pre.cause && !dryRun) ctx.event("refused", { phase: pre.target, text: pre.error, by, cause: pre.cause });
       return refuse(pre.error, pre.cause);
     }
-    const { target, baseBranch } = pre;
+    const { target, baseBranch, entry, note } = pre;
     const run = newRun({ rider: ctx.rider.name, phase: target, baseBranch, now: ctx.now(), taken: ctx.runIdsInUse(), roll: ctx.rollRunId });
-    if (!dryRun) ctx.event("run-started", { runId: run.runId, phase: target });
-    return enterPhase(ctx, run, target, { dryRun });
+    // How often the operator overrides the located phase is a trajectory signal (§6.2): the record keeps the choice.
+    run.entry = entry;
+    if (!dryRun) ctx.event("run-started", { runId: run.runId, phase: target, text: `${target} by ${entry.by}${note ? `; ${note}` : ""}` });
+    const r = enterPhase(ctx, run, target, { dryRun });
+    if (!r.ok) return r;
+    if (note) r.note = note;
+    // A dry run is the cheap "where would this instance start?": it names the entry, since no run records it.
+    if (dryRun) r.entry = entry;
+    return r;
   }));
 }
 
@@ -121,13 +129,16 @@ export function enterPhase(ctx, run, phase, { dryRun = false } = {}) {
     // What the sessions handed over: the commits that land past this tip are the human phase's own, and
     // `check` records them when the phase's check passes (the gate-precision record). A run recorded before
     // `workTip` existed (or revived by `overrule`) has a branch and no tip: read it now. A run with no work
-    // branch (on the base, or any instance rider's, §11.1) hands over HEAD; that is not a work tip.
+    // branch (on the base, or any instance rider's, §11.1) hands over HEAD; that is not a work tip. A run that
+    // starts at the gate had no session, so nothing was handed over, and the operator's commits there are
+    // charged against no claim (§6.2).
     if (!run.workTip && run.workBranch) { const tip = ctx.tip(`refs/heads/${run.workBranch}`); if (tip) run.workTip = tip; }
-    run.handoff = { phase, at, tip: run.workTip ?? ctx.tip("HEAD") };
+    run.handoff = hasSessionStretch(run) ? { phase, at, tip: run.workTip ?? ctx.tip("HEAD") } : null;
     ctx.saveRun(run);
     ctx.event("phase-entered", { runId: run.runId, phase, text: `visit ${run.visits[phase]} · human: ${def.check}` });
     // No `checkExit`: the check has not run yet, and `rider check` is what runs it. `show` runs after the lock (`readouts`).
-    return { ok: true, state: "human", rider: run.rider, instance: ctx.instance.id, runId: run.runId, phase, check: def.check, show: null, notes: run.notes, totalCost: totalCost(run), [RUN]: run };
+    // The drift the run last saw, as `check`'s human block prints it: nothing else looks at the tree at a gate.
+    return { ok: true, state: "human", rider: run.rider, instance: ctx.instance.id, runId: run.runId, phase, check: def.check, show: null, notes: run.notes, totalCost: totalCost(run), ...driftOf(run), [RUN]: run };
   }
   const prompt = readFileSync(def.prompt, "utf8");
   const model = ctx.local.models?.[phase] ?? def.model;
@@ -184,9 +195,10 @@ export function next(ctx, label, { on, because = null, by = "judge", dryRun = fa
 
 /** The operator's ruling on a stop the judge routed to `operator`: revive that run and take a declared
  *  edge of the phase it stopped at. Without it an `operator` stop is a dead end — `next` needs an active
- *  run, and `start` cannot enter a human phase — so a ruling of "the phase's outcome stands" had no verb
- *  to carry it. The judge's stop stays in `transitions` and the ruling lands beside it as
- *  `by: "operator"`: the pair is one judge call and its review, which is what the record is read for. */
+ *  run, and `start` makes a fresh one, which can reach a gate but carries none of this run's sessions —
+ *  so a ruling of "the phase's outcome stands" had no verb to carry it. The judge's stop stays in
+ *  `transitions` and the ruling lands beside it as `by: "operator"`: the pair is one judge call and its
+ *  review, which is what the record is read for. */
 export function overrule(ctx, label, { on, because, dryRun = false } = {}) {
   // The pre-flight (§4), before the lock, against the run the key names when it is the last ended one.
   const seen = ctx.readState();

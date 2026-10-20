@@ -34,6 +34,10 @@ test("a fresh start runs intake, creates the run in state.json, launches the sta
   assert.equal(launch.prompt, "PLAN PROMPT");
   assert.equal(launch.name, `rider lemmaria/default/${run.runId} plan`);
   assert.equal(launch.cwd, p.root);
+  // No phase named and no locate declared: the canonical start (§6.2).
+  assert.deepEqual(run.entry, { by: "start", located: null, phase: "plan" });
+  assert.equal(ctx.readEvents().find((e) => e.kind === "run-started").text, "plan by start");
+  assert.equal("note" in r, false);
   p.cleanup();
 });
 
@@ -56,16 +60,21 @@ test("an instance rider's launch carries its facts and its name; an undeclared r
   q.cleanup();
 });
 
-test("start names a phase as an operator override; a human or unknown phase is refused", () => {
+test("start names a phase as an operator override; an unknown phase is refused, and a human one is entered", (t) => {
   const p = tmpProject();
+  t.after(p.cleanup);
   const binding = new FakeBinding({ script: [{}] });
   const ctx = makeCtx({ root: p.root, binding });
-  assert.match(start(ctx, { phase: "merge" }).error, /human phase/);
   assert.match(start(ctx, { phase: "ship" }).error, /no phase "ship"/);
+  assert.match(start(ctx, { phase: "toString" }).error, /no phase "toString"/, "a phase name never reads through Object.prototype");
   assert.equal(ctx.loadRun(), null);
+  // §6.2: any declared phase, a gate included. The gate waits on the operator, so nothing launches.
+  const gate = start(ctx, { phase: "merge" });
+  assert.deepEqual([gate.state, gate.phase, binding.calls.length], ["human", "merge", 0]);
+  assert.deepEqual(ctx.loadRun().entry, { by: "operator", located: null, phase: "merge" });
+  assert.equal(reset(ctx, { on: gate.runId }).ok, true);
   assert.equal(start(ctx, { phase: "build" }).phase, "build");
   assert.equal(binding.calls[0].prompt, "BUILD PROMPT");
-  p.cleanup();
 });
 
 test("intake refuses before any launch and names the command", () => {
@@ -130,11 +139,9 @@ test("a usage refusal records nothing; --by names who sent a refused start", (t)
   const p = tmpProject({ riderMd: withIntake("exit 3") });
   t.after(p.cleanup);
   const ctx = makeCtx({ root: p.root, binding: new FakeBinding({ script: [{}] }) });
-  for (const phase of ["merge", "ship"]) {
-    const r = start(ctx, { phase });
-    assert.deepEqual([r.ok, "cause" in r], [false, false], r.error);
-  }
-  assert.deepEqual(ctx.readEvents(), [], "an unknown or human phase is a usage error, not a refused entry");
+  const r = start(ctx, { phase: "ship" });
+  assert.deepEqual([r.ok, "cause" in r], [false, false], r.error);
+  assert.deepEqual(ctx.readEvents(), [], "an unknown phase is a usage error, not a refused entry");
   start(ctx, { by: "operator" });
   assert.deepEqual(ctx.readEvents().map((e) => [e.kind, e.by, e.cause]), [["refused", "operator", "intake"]]);
 });
@@ -182,6 +189,157 @@ test("start runs the target's requires after intake, with no run, no phase left 
   for (const line of ["RIDER_PHASE=build", "RIDER_FROM_PHASE=", "RIDER_LABEL=", "RIDER_RUN_ID="]) assert.match(env, new RegExp(`^${line}$`, "m"));
   writeFileSync(join(p.root, "ok.flag"), "");
   assert.equal(start(ctx, { phase: "build" }).phase, "build");
+});
+
+/** The test rider (or `md`) whose fresh runs enter the phase `cmd` prints (§6.1). */
+const locating = (cmd, md = TEST_RIDER_MD) => md.replace("start: plan\n", `start: plan\nlocate: ${cmd}\n`);
+/** A project on that rider, its `where.txt` holding `where` when given, and a context with a binding ready for one launch. */
+function located(t, { cmd = "cat where.txt", where = null, md, local } = {}) {
+  const p = tmpProject({ riderMd: locating(cmd, md) });
+  t.after(p.cleanup);
+  if (where != null) writeFileSync(join(p.root, "where.txt"), where);
+  const binding = new FakeBinding({ script: [{ statuses: ["running"] }] });
+  return { p, binding, ctx: makeCtx({ root: p.root, binding, local }) };
+}
+const launches = (binding) => binding.calls.filter((c) => c.call === "launch");
+
+test("locate names the phase a fresh run enters, and run.entry records it", (t) => {
+  const { ctx, binding } = located(t, { where: "build" });
+  const r = start(ctx);
+  assert.deepEqual([r.ok, r.state, r.phase], [true, "running", "build"]);
+  assert.equal(launches(binding)[0].prompt, "BUILD PROMPT");
+  assert.deepEqual(ctx.loadRun().entry, { by: "locate", located: "build", phase: "build" });
+  assert.deepEqual(ctx.readEvents().map((e) => [e.kind, e.phase, e.text]).slice(0, 1), [["run-started", "build", "build by locate"]]);
+  assert.equal("note" in r, false, "no disagreement, no note");
+});
+
+test("CRLF and blanks around the located phase are trimmed", (t) => {
+  const { ctx } = located(t, { where: "\n  build\r\n" });
+  assert.equal(start(ctx).phase, "build");
+});
+
+test("locate runs first, before intake, told its instance but no phase", (t) => {
+  // §4: the target comes first, and locate is what finds it, so it runs with RIDER_PHASE empty. The intake passes only
+  // once locate has run.
+  const { p, ctx } = located(t, { cmd: "env > loc.env; cat where.txt", where: "build", md: withIntake("test -f loc.env") });
+  assert.equal(start(ctx).phase, "build");
+  const env = readFileSync(join(p.root, "loc.env"), "utf8");
+  for (const line of ["RIDER_PHASE=", "RIDER_RUN_ID=", "RIDER_INSTANCE=default", "RIDER_SCOPE=."]) assert.match(env, new RegExp(`^${line}$`, "m"));
+});
+
+test("locate printing an undeclared phase is refused, quoting it", (t) => {
+  const { ctx, binding } = located(t, { where: "revew" });
+  const r = start(ctx);
+  assert.match(r.error, /locate printed "revew", which is not a declared phase/);
+  assert.deepEqual([r.ok, r.cause, r.error], [false, "locate", 'locate printed "revew", which is not a declared phase']);
+  assert.equal(existsSync(ctx.paths.state), false, "no run");
+  assert.equal(binding.calls.length, 0);
+  assert.deepEqual(ctx.readEvents().map((e) => [e.kind, e.runId, e.phase, e.key, e.text, e.by, e.cause]), [["refused", null, null, null, r.error, "judge", "locate"]]);
+  // A name on Object.prototype is no declared phase either.
+  writeFileSync(join(ctx.root, "where.txt"), "toString");
+  assert.deepEqual([start(ctx).cause, start(ctx).error], ["locate", 'locate printed "toString", which is not a declared phase']);
+});
+
+test("locate printing nothing is refused; it never falls back to start:", (t) => {
+  const { ctx, binding } = located(t, { where: "\n \n" });
+  const r = start(ctx);
+  assert.deepEqual([r.ok, r.cause, r.error], [false, "locate", "locate printed nothing"]);
+  assert.equal(binding.calls.length, 0);
+  assert.deepEqual(ctx.readEvents().map((e) => e.cause), ["locate"]);
+});
+
+test("a failing locate is relayed", (t) => {
+  // §6.2: this is how a rider says there is nothing for a session to do.
+  const { ctx, binding } = located(t, { cmd: "echo cycle closed; exit 3" });
+  const r = start(ctx);
+  assert.match(r.error, /cycle closed/);
+  assert.deepEqual([r.ok, r.cause, r.error], [false, "locate", "locate failed (exit 3): echo cycle closed; exit 3\ncycle closed"]);
+  assert.equal(existsSync(ctx.paths.state), false);
+  assert.equal(binding.calls.length, 0);
+  // On the operator's word it is only noted (§6.2).
+  const forced = start(ctx, { phase: "build" });
+  assert.deepEqual([forced.state, forced.phase, forced.note], ["running", "build", "locate failed (exit 3); entering build on the operator's word"]);
+  assert.deepEqual(ctx.loadRun().entry, { by: "operator", located: null, phase: "build" });
+});
+
+test("a locate that hangs fails as a timeout, and says so", (t) => {
+  // The cap is lowered for the test only; a hung locate is a failure, never a pass.
+  const { ctx } = located(t, { cmd: "sleep 3", local: { requiresTimeoutMs: 200 } });
+  const r = start(ctx);
+  assert.deepEqual([r.ok, r.cause, r.error], [false, "locate", "locate failed (exit -1: timed out after 0.2 s): sleep 3"]);
+  assert.equal(start(ctx, { phase: "build" }).note, "locate failed (exit -1: timed out after 0.2 s); entering build on the operator's word");
+});
+
+test("stderr does not pollute the located phase", (t) => {
+  const { ctx } = located(t, { cmd: "echo build; echo warn >&2" });
+  assert.equal(start(ctx).phase, "build");
+});
+
+test("the operator's phase wins, and the disagreement is noted", (t) => {
+  const { ctx, binding } = located(t, { where: "close" });
+  // Who sent the verb (`by`, on its events) is not how the phase was chosen (`run.entry.by`).
+  const r = start(ctx, { phase: "build", by: "judge" });
+  assert.deepEqual([r.state, r.phase, r.note], ["running", "build", "located close; entering build on the operator's word"]);
+  assert.equal(launches(binding)[0].prompt, "BUILD PROMPT");
+  const run = ctx.loadRun();
+  assert.equal(run.entry.by, "operator");
+  assert.deepEqual(run.entry, { by: "operator", located: "close", phase: "build" });
+  assert.equal(ctx.readEvents()[0].text, "build by operator; located close; entering build on the operator's word");
+});
+
+test("an operator's start that names no phase still enters where locate says", (t) => {
+  const { ctx } = located(t, { where: "close" });
+  assert.equal(start(ctx, { by: "operator" }).phase, "close");
+  assert.deepEqual(ctx.loadRun().entry, { by: "locate", located: "close", phase: "close" });
+});
+
+test("locate agreeing with the operator's phase notes nothing", (t) => {
+  const { ctx } = located(t, { where: "build" });
+  const r = start(ctx, { phase: "build" });
+  assert.equal("note" in r, false);
+  assert.deepEqual(ctx.loadRun().entry, { by: "operator", located: "build", phase: "build" });
+  assert.equal(ctx.readEvents()[0].text, "build by operator");
+});
+
+test("an undeclared or empty located line is only noted on the operator's word", (t) => {
+  const { ctx } = located(t, { where: "revew" });
+  const r = start(ctx, { phase: "build" });
+  assert.equal(r.note, 'locate printed "revew", which is not a declared phase; entering build on the operator\'s word');
+  assert.deepEqual(ctx.loadRun().entry, { by: "operator", located: null, phase: "build" });
+});
+
+test("locate may name a gate: the run starts at the human phase, with no handoff", (t) => {
+  const { ctx, binding } = located(t, { where: "merge" });
+  const r = start(ctx);
+  assert.deepEqual([r.ok, r.state, r.phase, r.show], [true, "human", "merge", "SHOW-OUTPUT"]);
+  assert.equal(binding.calls.length, 0, "a gate launches nothing");
+  const run = ctx.loadRun();
+  assert.equal(run.handoff, null, "no session handed anything over");
+  assert.deepEqual(run.entry, { by: "locate", located: "merge", phase: "merge" });
+  assert.deepEqual(ctx.readEvents().map((e) => [e.kind, e.phase]), [["run-started", "merge"], ["phase-entered", "merge"]]);
+});
+
+test("a gate whose check already passes is refused and creates no run", (t) => {
+  const { p, ctx } = located(t, { where: "merge" });
+  writeFileSync(join(p.root, "merged.flag"), "");
+  const r = start(ctx);
+  assert.deepEqual([r.ok, r.cause, r.error], [false, "gate", "merge's check already passes; nothing waits on the operator there"]);
+  assert.equal(existsSync(ctx.paths.state), false, "no run");
+  assert.deepEqual(ctx.readEvents().map((e) => [e.kind, e.phase, e.cause]), [["refused", "merge", "gate"]]);
+  assert.equal(start(ctx, { phase: "merge" }).cause, "gate", "the operator's word does not enter a passed gate either");
+  const dry = start(ctx, { dryRun: true });
+  assert.equal(dry.cause, "gate", "a dry run runs the gate check");
+  assert.equal(ctx.readEvents().length, 2, "and records nothing");
+});
+
+test("a dry run reports the located entry and records nothing", (t) => {
+  const { ctx, binding } = located(t, { where: "close" });
+  const d = start(ctx, { phase: "build", dryRun: true });
+  assert.deepEqual([d.state, d.phase, d.entry, d.note], ["dry-run", "build", { by: "operator", located: "close", phase: "build" }, "located close; entering build on the operator's word"]);
+  writeFileSync(join(ctx.root, "where.txt"), "merge");
+  const gate = start(ctx, { dryRun: true });
+  assert.deepEqual([gate.state, gate.phase, gate.human, gate.entry], ["dry-run", "merge", true, { by: "locate", located: "merge", phase: "merge" }]);
+  assert.deepEqual([binding.calls.length, ctx.readEvents().length, existsSync(ctx.paths.state)], [0, 0, false]);
 });
 
 test("a second start on an active run is refused", () => {

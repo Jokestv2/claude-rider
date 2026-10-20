@@ -65,6 +65,32 @@ test("requires: a list of non-empty commands on a session phase, normalized to [
   assert.equal("requires" in rider.phases.merge, false, "a human phase has none");
 });
 
+test("locate: an optional non-empty command, normalized to null when absent; start: still names a session phase", (t) => {
+  // §6.1. A bare `locate:` reads as absent.
+  for (const locate of ["tool next-phase", "cat where.txt", null]) {
+    const ok = structuredClone(data);
+    ok.locate = locate;
+    assert.deepEqual(validateRider(ok, allPrompts), [], JSON.stringify(locate));
+  }
+  for (const locate of ["", "  ", 3, ["tool next-phase"], { a: "x" }]) {
+    const bad = structuredClone(data);
+    bad.locate = locate;
+    assert.deepEqual(validateRider(bad, allPrompts), ["locate: must be one non-empty shell command"], JSON.stringify(locate));
+  }
+  // locate may name a gate (§6.2); the canonical start may not.
+  const gate = structuredClone(data);
+  gate.locate = "tool next-phase";
+  gate.start = "merge";
+  assert.deepEqual(validateRider(gate, allPrompts), ['start: "merge" is a human phase']);
+
+  const p = tmpProject();
+  t.after(p.cleanup);
+  assert.equal(loadRider(p.file).locate, null);
+  const q = tmpProject({ riderMd: TEST_RIDER_MD.replace("start: plan\n", "start: plan\nlocate: tool next-phase\n") });
+  t.after(q.cleanup);
+  assert.equal(loadRider(q.file).locate, "tool next-phase");
+});
+
 test("a missing prompt file is an error; prompt defaults to <phase>.md", () => {
   const errs = validateRider(data, (p) => p !== "build.md");
   assert.deepEqual(errs, ["phases.build: prompt file build.md not found"]);

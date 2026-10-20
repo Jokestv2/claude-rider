@@ -146,3 +146,29 @@ test("a requires that timed out says so in the requires line", () => {
   const lines = renderCheck({ ...done, requires, decideWith: "decide with: …" }).split("\n");
   assert.equal(lines.at(-2), "── requires ── code green → close ✗ tool budget --ok (exit -1: timed out after 10 s)");
 });
+
+test("start's note leads its result, and a dry run names its entry", () => {
+  const note = "located close; entering build on the operator's word";
+  const running = { ok: true, state: "running", runId: "3f2a", phase: "build", visit: 1, model: "opus", session: { shortId: "s1" }, attach: "claude attach s1" };
+  assert.deepEqual(render("start", { ...running, note }).split("\n"), [`note: ${note}`, "build started as opus: s1  (claude attach s1)", "visit 1 of run 3f2a"]);
+  assert.doesNotMatch(render("start", running), /note:/);
+  const dry = { ok: true, state: "dry-run", phase: "build", model: "opus", name: "n", argv: ["fake", "--model", "opus"], entry: { by: "operator", located: "close", phase: "build" } };
+  assert.deepEqual(render("start", { ...dry, note }).split("\n"), [`note: ${note}`, "[dry-run] build (opus): fake --model opus", "entry: build by operator"]);
+  assert.deepEqual(render("start", { ...dry, entry: { by: "locate", located: "build", phase: "build" } }).split("\n"), ["[dry-run] build (opus): fake --model opus", "entry: build by locate"]);
+  // At a gate, what entering it would do is wait on its check (§6.2).
+  const gate = { ok: true, state: "dry-run", phase: "merge", human: true, check: "test -f merged.flag", entry: { by: "locate", located: "merge", phase: "merge" } };
+  assert.deepEqual(render("start", gate).split("\n"), ["[dry-run] merge (human): test -f merged.flag", "entry: merge by locate"]);
+  assert.equal(render("next", { ok: true, state: "dry-run", to: "operator" }), "[dry-run] operator", "a dry run with no entry prints none");
+  // A check result's own note (the classification's) stays where the check block prints it.
+  assert.match(render("check", { ...done, note: "not listed once; confirming on the next check" }).split("\n")[0], /^rider lemmaria\/a\/3f2a /);
+});
+
+test("the block printed on entering a human phase carries the drift line, and start's note above it", () => {
+  const human = { ok: true, state: "human", rider: "lemmaria", instance: "a", runId: "3f2a", phase: "merge", check: "test -f merged.flag", show: null, notes: [], totalCost: 0, baseBranch: "main", branchDrift: { branch: "elsewhere", at: "2026-10-20T10:00:00.000Z" } };
+  const lines = render("next", human).split("\n");
+  assert.equal(lines[0], "rider lemmaria/a/3f2a · phase merge is yours");
+  assert.equal(lines[1], "drift: the shared working tree left main for elsewhere (first seen 2026-10-20T10:00:00.000Z) — the executor does not switch back");
+  assert.doesNotMatch(render("next", { ...human, branchDrift: null }), /drift:/);
+  const started = render("start", { ...human, branchDrift: null, note: "located build; entering merge on the operator's word" }).split("\n");
+  assert.deepEqual(started.slice(0, 2), ["note: located build; entering merge on the operator's word", "rider lemmaria/a/3f2a · phase merge is yours"]);
+});

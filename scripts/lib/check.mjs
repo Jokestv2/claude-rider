@@ -1,7 +1,7 @@
 // scripts/lib/check.mjs
 import { decideWithLine } from "./keys.mjs";
 import { signedOff, statusHint, waitingIsDone } from "./markers.mjs";
-import { edgePreflight } from "./preflight.mjs";
+import { edgePreflight, firstLine } from "./preflight.mjs";
 import { legalLabels } from "./rider-md.mjs";
 import { sh } from "./shell.mjs";
 import { chainCost, chainResumes, currentSession, keyOf, totalCost } from "./state.mjs";
@@ -61,9 +61,6 @@ function annotateRequires(ctx, run, r) {
     : { label, to, ok: false, cmd: x.cmd, status: x.status, firstLine: firstLine(x.output), ...(x.timedOut ? { timedOut: true } : {}) }));
   r.decideWith = decideWithFor(ctx, r.key, r.labels.map((l) => l.label), r.requires.filter((e) => !e.ok).map((e) => e.label));
 }
-
-/** The first non-empty line of a command's output, trimmed: what one entry of the requires line has room for. */
-const firstLine = (text) => String(text ?? "").split("\n").map((l) => l.trim()).find(Boolean) ?? "";
 
 /** The decide-with line for `key`, in one place: `result` builds it, and the requires annotation rebuilds it marked. */
 function decideWithFor(ctx, key, labels, failing = []) {
@@ -264,8 +261,9 @@ function noteAfterHandoff(ctx, run, branchTip) {
   if (commits) run.handoff.after = { ref, commits };
 }
 
-/** What `check` says of the shared tree (§11.1): the judge bound to one instance sees the drift its board row shows. */
-const driftOf = (run) => ({ baseBranch: run.baseBranch ?? null, branchDrift: run.branchDrift ?? null });
+/** What `check`, and the block printed on entering a human phase, say of the shared tree (§11.1): the judge bound to one
+ *  instance sees the drift its board row shows. */
+export const driftOf = (run) => ({ baseBranch: run.baseBranch ?? null, branchDrift: run.branchDrift ?? null });
 
 export function runEvidence(ctx, run) {
   return ctx.rider.evidence.map((cmd) => ({ cmd, ...sh(cmd, { ...ctx.shellOpts(run), capBytes: EVIDENCE_CAP, timeoutMs: 10_000 }) }));

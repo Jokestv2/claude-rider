@@ -75,7 +75,9 @@ test("overrule through the CLI: the run the judge stopped is the run that reache
   const started = json("start", "close").v;
   assert.equal(json("check").v.state, "done");
   assert.equal(json("next", "operator", "--because", "asked for a ruling", "--on", `${started.runId}.1`).v.state, "operator");
-  assert.equal(run("start", "merge").code, 2, "what 842b's judge told the operator to run: refused then, refused now");
+  // What 842b's judge told the operator to run. A start may enter a gate now (§6.2), but as a fresh run: this run
+  // reaches it only by overrule.
+  assert.match(run("start", "merge", "--dry-run").out, /^\[dry-run\] merge \(human\): test -f merged\.flag\nentry: merge by operator$/m);
   assert.match(run("status").out, /rider overrule "<label>" --because "…"[^\n]*\(gate green\)/);
   assert.equal(run("overrule", "gate green", "--on", started.runId).code, 2);
   const ruled = json("overrule", "gate green", "--because", "the in-place fix stands", "--on", started.runId);

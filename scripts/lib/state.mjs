@@ -48,6 +48,9 @@ export function isLive(run, rider) {
   const sess = currentSession(run);
   return sess?.outcome === "running" || sess?.outcome === "waiting";
 }
+/** Whether a session has worked on this run, so that entering a gate hands something over (§6.2). A wait is no session:
+ *  session records keep no `kind` (§7.4), so the test is written to hold once waits are recorded beside them. */
+export const hasSessionStretch = (run) => run.sessions.some((s) => s.kind !== "await");
 /** A rate-limited stretch no human turn reached is the watcher's to resume after the reset: with its watcher alive,
  *  status and await read it as running through this, and the board by its rule order (intervened first), so nothing
  *  sends a judge to decide it early (spec decision 15). */
