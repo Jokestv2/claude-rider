@@ -2,6 +2,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { awaitEvent, watchLoop } from "../scripts/lib/watch.mjs";
+import { currentKey } from "../scripts/lib/keys.mjs";
+import { currentSession } from "../scripts/lib/state.mjs";
 import { next, start, status } from "../scripts/lib/verbs.mjs";
 import { render } from "../scripts/lib/render.mjs";
 import { FakeBinding } from "./fake-binding.mjs";
@@ -157,26 +159,47 @@ test("five consecutive check failures: the watch emits an event and stops", () =
   t.p.cleanup();
 });
 
-test("no terminal event for a stretch the run moved past between the watcher's check and its emit", () => {
-  const t = setup([{ statuses: ["running", "done"], read: { lastText: "STATUS: planned", turns: 5 } }, { statuses: ["running"] }]);
-  const judge = makeCtx({ root: t.p.root, binding: t.binding, clock: t.clock });
-  start(t.ctx);
-  // The judge reads the stopped session's stored block and decides in the gap between the watcher's two holds:
-  // the seam is the watcher's next hold, taken once the stop is on file.
+/** The judge reads the stopped session's stored block and decides in the gap between the watcher's two holds: the seam is
+ *  the watcher's first hold once the stop is on file, which is its emit's, since its check stored the stop in the hold before. */
+function decideBeforeEmit(t, judge, outcome) {
   const update = t.ctx.update;
-  let decided = false;
+  const seam = { decided: false };
   t.ctx.update = (fn) => {
-    if (!decided && judge.loadRun().sessions[0].outcome === "done") {
-      decided = true;
-      assert.equal(next(judge, "planned", { on: status(judge).key, because: "plan committed" }).phase, "build");
+    const run = judge.loadRun();
+    if (!seam.decided && currentSession(run)?.outcome === outcome) {
+      seam.decided = true;
+      assert.equal(next(judge, "planned", { on: currentKey(run), because: "x" }).phase, "build");
     }
     return update(fn);
   };
-  assert.equal(watchLoop(t.ctx, opts(t)), null);
-  assert.equal(decided, true);
-  assert.deepEqual(wake(t.ctx), [], "an await armed on build must not wake on plan's stop");
-  assert.ok(t.logs.includes("the run moved on; exiting"));
-  assert.equal(t.ctx.loadRun().phase, "build");
+  return seam;
+}
+
+test("a decision between the watcher's check and its emit: no event for the decided stretch, and the same watcher emits the next one's stop", () => {
+  const t = setup([{ statuses: ["done"], read: { lastText: GREEN } }, { statuses: ["running", "done"], read: { lastText: "STATUS: code green\n<promise>X</promise>", turns: 9 } }]);
+  const judge = makeCtx({ root: t.p.root, binding: t.binding, clock: t.clock });
+  const { runId } = start(t.ctx);
+  // `next` spawns no watcher for build while this one lives, between its check and its emit: this one has to watch it.
+  const seam = decideBeforeEmit(t, judge, "done");
+  const out = watchLoop(t.ctx, opts(t));
+  assert.equal(seam.decided, true);
+  assert.deepEqual([out?.state, out?.phase], ["done", "build"]);
+  assert.deepEqual(wake(t.ctx).map((e) => e.key), [`${runId}.2`], "an await armed on build wakes on build's stop, never on plan's");
+  assert.ok(t.logs.includes("the run moved on; watching its current stretch"), t.logs.join("\n"));
+  t.p.cleanup();
+});
+
+test("a give-up emit that finds the run moved on keeps watching too", () => {
+  // No reset time in the limit: the watcher gives up at once, and the decision lands before that emit.
+  const t = setup([{ statuses: ["done"], read: { lastText: null, signal: "You've hit your limit" } }, { statuses: ["running", "done"], read: { lastText: "STATUS: code green\n<promise>X</promise>", turns: 9 } }]);
+  const judge = makeCtx({ root: t.p.root, binding: t.binding, clock: t.clock });
+  const { runId } = start(t.ctx);
+  const seam = decideBeforeEmit(t, judge, "rate-limited");
+  const out = watchLoop(t.ctx, opts(t));
+  assert.equal(seam.decided, true);
+  assert.deepEqual([out?.state, out?.phase], ["done", "build"]);
+  assert.deepEqual(wake(t.ctx).map((e) => e.key), [`${runId}.2`]);
+  assert.ok(t.logs.includes("the run moved on; watching its current stretch"), t.logs.join("\n"));
   t.p.cleanup();
 });
 

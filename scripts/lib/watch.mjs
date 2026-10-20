@@ -14,7 +14,12 @@ const emit = (ctx, r, kind, text = "") => ctx.update(() => {
   ctx.event(kind, { runId: r.runId, phase: r.phase, key: r.key, text });
   return true;
 });
+/** A result with no key can never emit: going round again would spin on it, so it ends the watch. */
 const MOVED_ON = "the run moved on; exiting";
+/** A decision landed between the check and its emit, and its new stretch has no watcher but this one. It cannot spin:
+ *  with a key, emit is false only once the run's current key is another, so the next pass classifies another stretch,
+ *  or finds nothing live and returns. */
+const MOVED_ON_WATCHING = "the run moved on; watching its current stretch";
 const MOVED_ON_WAITING = "the run moved on while waiting; watching its current stretch";
 
 /** The give-up event when `check` keeps throwing. Reads the run defensively: a corrupt state.json is the
@@ -80,7 +85,7 @@ export function watchLoop(ctx, { maxWaitHours = 6, pollMs = 30_000, maxResumes =
       else if (consecutive >= maxResumes) giveUp = `resumed after a rate limit ${consecutive} times and the limit keeps returning`;
       else if (waitMs > maxWaitHours * 3600_000) giveUp = `reset is ${fmtDuration(waitMs)} away, past the ${maxWaitHours}h cap (maxWaitHours in local.json)`;
       if (giveUp) {
-        if (!emit(ctx, r, "rate-limited", giveUp)) { log(MOVED_ON); return null; }
+        if (!emit(ctx, r, "rate-limited", giveUp)) { if (!r.key) { log(MOVED_ON); return null; } log(MOVED_ON_WATCHING); continue; }
         log(`rate limited; giving up: ${giveUp}`);
         return r;
       }
@@ -99,13 +104,13 @@ export function watchLoop(ctx, { maxWaitHours = 6, pollMs = 30_000, maxResumes =
       const res = resume(ctx, { on: waited, by: "executor", reason: "rate-limit" });
       if (!res.ok) {
         if (res.stale) { log(MOVED_ON_WAITING); continue; }
-        if (!emit(ctx, r, "rate-limited", `resume failed: ${res.error}`)) { log(MOVED_ON); return null; }
+        if (!emit(ctx, r, "rate-limited", `resume failed: ${res.error}`)) { if (!r.key) { log(MOVED_ON); return null; } log(MOVED_ON_WATCHING); continue; }
         return r;
       }
       log(`resumed as ${res.session.shortId}`);
       continue;
     }
-    if (!emit(ctx, r, r.state, r.statusHint ?? r.doneReason ?? "")) { log(MOVED_ON); return null; }
+    if (!emit(ctx, r, r.state, r.statusHint ?? r.doneReason ?? "")) { if (!r.key) { log(MOVED_ON); return null; } log(MOVED_ON_WATCHING); continue; }
     log(`${r.state}: ${r.statusHint ?? r.doneReason ?? ""}`);
     return r;
   }
