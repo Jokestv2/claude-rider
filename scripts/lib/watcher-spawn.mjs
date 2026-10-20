@@ -2,6 +2,7 @@
 import { spawn as nodeSpawn } from "node:child_process";
 import { existsSync, mkdirSync, openSync, readFileSync, rmSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { killCheckGroup } from "./check-run.mjs";
 import { bootTime, isAlive, writtenBeforeBoot } from "./proc.mjs";
 import { writeJsonAtomic } from "./store.mjs";
 
@@ -38,8 +39,11 @@ export function ensureWatcher(paths, { riderName, instance, root, script = RIDER
   return true;
 }
 
+/** The watcher first, so it starts no further check; then the group of a check it left running, which the watcher's
+ *  death does not end (§7.3.1). A reset then cannot overlap a tick from the run it forgets. */
 export function killWatcher(paths, alive = isAlive) {
   const pid = watcherAlive(paths, alive);
   if (pid) { try { process.kill(pid); } catch { /* already gone */ } }
   rmSync(paths.watchPid, { force: true });
+  killCheckGroup(paths);
 }

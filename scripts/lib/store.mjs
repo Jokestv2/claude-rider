@@ -13,11 +13,12 @@ export function riderPaths(root, rider) {
   const dir = join(root, ".rider", rider);
   return { dir, local: join(dir, "local.json"), v3Run: join(dir, "run.json") };
 }
-/** One directory per instance (§6); `rider` and `instance` ride along so an event can name its source. */
+/** One directory per instance (§6); `rider` and `instance` ride along so an event can name its source. `checkPid`
+ *  names the process group of the await check now running, and `checkOut` takes its output (§7.3.1). */
 export function instancePaths(root, rider, instance) {
   const dir = join(root, ".rider", rider, instance);
   const logs = join(dir, "logs");
-  return { rider, instance, dir, state: join(dir, "state.json"), events: join(dir, "events.jsonl"), runs: join(dir, "runs"), logs, watchPid: join(dir, "watch.pid"), watchLog: join(logs, "watch.log"), lock: join(dir, "lock") };
+  return { rider, instance, dir, state: join(dir, "state.json"), events: join(dir, "events.jsonl"), runs: join(dir, "runs"), logs, watchPid: join(dir, "watch.pid"), watchLog: join(logs, "watch.log"), lock: join(dir, "lock"), checkPid: join(dir, "check.pid"), checkOut: join(logs, "check.out") };
 }
 
 /** A corrupt state or local file is undiagnosable from the judge's side unless the throw names it. */

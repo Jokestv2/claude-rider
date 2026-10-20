@@ -41,6 +41,7 @@ import { join } from "node:path";
 import { listInstances, loadRider } from "../scripts/lib/rider-md.mjs";
 import { loadLocal } from "../scripts/lib/state.mjs";
 import { createContext } from "../scripts/lib/context.mjs";
+import { resolveShell, sh } from "../scripts/lib/shell.mjs";
 import { riderPaths, WAKE_KINDS } from "../scripts/lib/store.mjs";
 
 export const TEST_RIDER_MD = `---
@@ -102,14 +103,23 @@ export function settled(check, ctx, max = 5) {
   return r;
 }
 
-/** A context on one instance of the test rider: `instance` names one of its declared instances, or null for `default`. */
-export function makeCtx({ root, name = "lemmaria", instance = null, binding, clock = new FakeClock(), local = {}, spawnWatcher = () => false, watcherAlive = () => null, killWatcher = () => {}, lock = {}, riderCount = 1, rollRunId = undefined }) {
+/** An await check run in this process by `sh()`, with no runner and no process group: offline fixtures such as
+ *  `test -f ready.flag || exit 75` need neither. */
+const inProcessCheck = (cwd, shell) => (cmd, { timeoutMs, env }) => {
+  const r = sh(cmd, { cwd, shell, timeoutMs, env });
+  return { status: r.status, timedOut: /ETIMEDOUT/.test(r.error ?? ""), output: r.output, error: r.error };
+};
+
+/** A context on one instance of the test rider: `instance` names one of its declared instances, or null for `default`.
+ *  `runCheck` defaults to the in-process check above; a test passes a scripted one to pin what the watcher does with each answer. */
+export function makeCtx({ root, name = "lemmaria", instance = null, binding, clock = new FakeClock(), local = {}, spawnWatcher = () => false, watcherAlive = () => null, killWatcher = () => {}, runCheck = null, lock = {}, riderCount = 1, rollRunId = undefined }) {
   const rider = loadRider(join(root, "riders", name, "RIDER.md"));
   const { declared, instances } = listInstances(root, rider);
   const id = instance ?? "default";
   const found = instances.find((i) => i.id === id);
   if (!found) throw new Error(`makeCtx: ${rider.name} has no instance ${id}; have: ${instances.map((i) => i.id).join(", ") || "none"}`);
-  return createContext({ rider, instance: { ...found, declared }, root, local: { ...loadLocal(riderPaths(root, rider.name)), ...local }, binding, now: clock.now, sleep: clock.sleep, spawnWatcher, watcherAlive, killWatcher, lock, riderCount, rollRunId });
+  const merged = { ...loadLocal(riderPaths(root, rider.name)), ...local };
+  return createContext({ rider, instance: { ...found, declared }, root, local: merged, binding, now: clock.now, sleep: clock.sleep, spawnWatcher, watcherAlive, killWatcher, runCheck: runCheck ?? inProcessCheck(root, resolveShell(merged)), lock, riderCount, rollRunId });
 }
 
 /** A run edited by hand is written the way every writer writes: under the instance lock. */

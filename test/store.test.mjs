@@ -21,6 +21,7 @@ test("paths: one directory per instance under the rider's, laid out as §6", () 
   assert.deepEqual(instancePaths("/p", "lemmaria", "alpha"), {
     rider: "lemmaria", instance: "alpha", dir: d, state: join(d, "state.json"), events: join(d, "events.jsonl"), runs: join(d, "runs"),
     logs: join(d, "logs"), watchPid: join(d, "watch.pid"), watchLog: join(d, "logs", "watch.log"), lock: join(d, "lock"),
+    checkPid: join(d, "check.pid"), checkOut: join(d, "logs", "check.out"),
   });
   assert.equal(endedRunPath(instancePaths("/p", "lemmaria", "alpha"), { runId: "ab12", startedAt: "2026-10-19T12:00:00.000Z" }), join(d, "runs", "2026-10-19T12-00-00-000Z-ab12.json"));
   assert.deepEqual(WAKE_KINDS, ["done", "gone", "waiting", "intervened", "rate-limited", "watcher-stopped"]);

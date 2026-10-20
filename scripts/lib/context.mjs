@@ -6,11 +6,12 @@ import { resolveShell, sh } from "./shell.mjs";
 import { riderEnv, scopeOf, totalCost, writeLog } from "./state.mjs";
 import { acquireLock, appendEvent, emptyState, endedRunPath, instancePaths, readEvents, readJson, readState, writeJsonAtomic, writeState } from "./store.mjs";
 import { ensureWatcher, killWatcher, watcherAlive } from "./watcher-spawn.mjs";
+import { runCheckProcess } from "./check-run.mjs";
 import { sleepSync } from "./proc.mjs";
 
 /** Everything a verb needs for one instance, behind one object so tests can inject a clock, a sleep and a binding.
  *  It is also the instance's only writer (§7.1): every write asserts that `update` holds the instance's lock. */
-export function createContext({ rider, instance, root, local, binding, now = () => new Date(), sleep = sleepSync, spawnWatcher = null, watcherAlive: aliveFn = null, killWatcher: killFn = null, lock = {}, riderCount = 1, rollRunId = undefined }) {
+export function createContext({ rider, instance, root, local, binding, now = () => new Date(), sleep = sleepSync, spawnWatcher = null, watcherAlive: aliveFn = null, killWatcher: killFn = null, runCheck: runCheckFn = null, lock = {}, riderCount = 1, rollRunId = undefined }) {
   const paths = instancePaths(root, rider.name, instance.id);
   const shell = resolveShell(local);
   let depth = 0;
@@ -129,6 +130,8 @@ export function createContext({ rider, instance, root, local, binding, now = () 
     ensureWatcher() { locked("ensureWatcher"); return spawnWatcher ? spawnWatcher() : ensureWatcher(paths, { riderName: rider.name, instance: instance.id, root }); },
     watcherAlive: () => (aliveFn ? aliveFn() : watcherAlive(paths)),
     killWatcher() { locked("killWatcher"); return killFn ? killFn() : killWatcher(paths); },
+    /** An await check runs in its own process group, through the runner, so a timeout or a reset kills all of it (§7.3.1). */
+    runCheck: (cmd, { timeoutMs, env, key }) => (runCheckFn ? runCheckFn(cmd, { timeoutMs, env, key }) : runCheckProcess(paths, { cmd, cwd: root, shell, env, timeoutMs, key })),
   };
   return ctx;
 }
