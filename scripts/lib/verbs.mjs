@@ -4,7 +4,7 @@ import { RUN, readouts } from "./check.mjs";
 import { currentKey, nowLine, parseRunKey, parseStretchKey, snapshot, targetFlags } from "./keys.mjs";
 import { legalLabels, onwardEdges, overrulable } from "./rider-md.mjs";
 import { sh } from "./shell.mjs";
-import { currentSession, keyOf, newRun, scopeOf, totalCost } from "./state.mjs";
+import { awaitsReset, currentSession, keyOf, newRun, scopeOf, totalCost } from "./state.mjs";
 
 export function refuse(error) { return { ok: false, error }; }
 
@@ -237,7 +237,8 @@ export function status(ctx) {
   if (!run) return { ok: true, state: "none", rider: ctx.rider.name, ...where, watcher, lastEvent, lastRun };
   const def = ctx.rider.phases[run.phase];
   const sess = currentSession(run);
-  const state = def.kind === "human" ? "human" : !sess ? "none" : sess.outcome === "running" ? "running" : sess.outcome === "waiting" ? "waiting" : "finished";
+  // A rate-limited stretch its live watcher will resume is running, not finished: its hint is await, not decide.
+  const state = def.kind === "human" ? "human" : !sess ? "none" : sess.outcome === "running" || (awaitsReset(sess) && watcher) ? "running" : sess.outcome === "waiting" ? "waiting" : "finished";
   return {
     ok: true, state, rider: run.rider, ...where, runId: run.runId, key: currentKey(run), phase: run.phase, visits: run.visits, baseBranch: run.baseBranch ?? null, workBranch: run.workBranch ?? null, workTip: run.workTip ?? null, branchDrift: run.branchDrift ?? null, startedAt: run.startedAt, watcher, lastEvent,
     totalCost: totalCost(run),

@@ -188,8 +188,8 @@ opened when they want it.
   confirms a stop the session never signed before it acts on it, because acting means stopping
   the session. Arm the watch and stop.
 - **`gone`** is a killed session: pick `resume` (the executor re-enters the same session).
-- **`rate-limited`**: look at the watcher in `status`. **Alive** — it is waiting for the reset and
-  resumes the session itself: do not decide; arm the watch (step 3), which waits with it until the
+- **`rate-limited`**: look at the watcher in `status`. **Alive** (`status` then reads `running`) —
+  it is waiting for the reset and resumes the session itself: do not decide; arm the watch (step 3), which waits with it until the
   watcher's next event, and stop. **None** — the watcher gave up (three resumes, or a reset past
   its cap) or died: tell the operator the reset time in the block and stop; when they say so, run
   `rider resume --on <key> --by operator`, the key copied from the block's `decide with:` line.

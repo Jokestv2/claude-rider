@@ -2,7 +2,7 @@
 import { check, respawnWatcher, RUN } from "./check.mjs";
 import { currentKey } from "./keys.mjs";
 import { fmtDuration } from "./markers.mjs";
-import { consecutiveRateLimitResumes, currentSession, isLive, keyOf } from "./state.mjs";
+import { awaitsReset, consecutiveRateLimitResumes, currentSession, isLive, keyOf } from "./state.mjs";
 import { WAKE_KINDS } from "./store.mjs";
 import { resume } from "./verbs.mjs";
 
@@ -114,8 +114,7 @@ export function watchLoop(ctx, { maxWaitHours = 6, pollMs = 30_000, maxResumes =
 /** A rate-limited stretch whose watcher is alive is waiting for the reset, and reads as running (spec decision 15). The
  *  watcher resumes it on its own, or emits `rate-limited` when it gives up: either way an event comes. */
 function waitsOnReset(ctx, run) {
-  const sess = run && currentSession(run);
-  return sess?.outcome === "rate-limited" && !sess.intervened && !!ctx.watcherAlive();
+  return awaitsReset(run && currentSession(run)) && !!ctx.watcherAlive();
 }
 
 /** What the judge backgrounds (§3.3, §13): block until the watcher's next wake event, or until the phase is past

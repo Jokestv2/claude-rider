@@ -3,6 +3,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { awaitEvent, watchLoop } from "../scripts/lib/watch.mjs";
 import { next, start, status } from "../scripts/lib/verbs.mjs";
+import { render } from "../scripts/lib/render.mjs";
 import { FakeBinding } from "./fake-binding.mjs";
 import { FakeClock, limitSoon, makeCtx, save, tmpProject, wake } from "./helpers.mjs";
 
@@ -236,5 +237,29 @@ test("await: a rate-limited stretch whose watcher is alive waits for the reset; 
   pid = null;
   const gone = awaitEvent(ctx, { maxMinutes: 60, pollMs: 10_000 });
   assert.deepEqual([gone.ok, gone.events, gone.reason], [true, [], "phase plan is rate-limited"]);
+  p.cleanup();
+});
+
+test("status: a rate-limited stretch whose watcher is alive reads as running, as await and the board read it", () => {
+  const p = tmpProject();
+  const clock = new FakeClock();
+  let pid = 4242;
+  const ctx = makeCtx({ root: p.root, binding: new FakeBinding({ script: [{ statuses: ["running"] }] }), clock, watcherAlive: () => pid });
+  start(ctx);
+  const run = ctx.loadRun();
+  Object.assign(run.sessions[0], { outcome: "rate-limited", rateLimit: { at: clock.now().toISOString(), resetAt: "2026-09-03T13:00:00.000Z" } });
+  save(ctx, run);
+  // The watcher resumes it after the reset: the hint must not send the judge to decide (spec decision 15).
+  const live = status(ctx);
+  assert.equal(live.state, "running");
+  assert.match(render("status", live), /^next: arm rider await \(background\) and stop$/m);
+  // With the watcher gone, nobody resumes it: the stretch is the judge's (or the operator's) to decide.
+  pid = null;
+  assert.equal(status(ctx).state, "finished");
+  // A human turn reached the session: check classifies it intervened, the watcher does not wait on it.
+  pid = 4242;
+  Object.assign(run.sessions[0], { intervened: true });
+  save(ctx, run);
+  assert.equal(status(ctx).state, "finished");
   p.cleanup();
 });
