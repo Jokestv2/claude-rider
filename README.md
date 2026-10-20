@@ -530,21 +530,28 @@ finding no run and launching a paid session. Leave it in place.
   (three runs on 2026-09-04, about $0.32 in total); 16/17 at `59c7d67` after the review fix wave
   (2 min 33 s, about $0.12) — the one failure was the zero-sample flake on the pending-subagent
   assertion described under *Verified on*, and every assertion that touches the changed code
-  passed. Not rerun: the binding gained two additive fields afterwards (`lastAt` in `12de44b`,
-  `stopHint` in `3bc1ea7`), covered offline, and nothing has run live on the per-instance state
-  layout yet.
+  passed. On the per-instance state layout: 20/21 at `5425f5d` on 2026-10-20 (Linux, Claude Code
+  2.1.304, about $0.04). The one failure was the same zero-sample flake. The two-instance section,
+  decision keys, the board and the detached watcher all passed.
+- **The smoke needs a trusted workspace.** Since 2.1.304, `claude --bg` refuses to launch in a
+  directory nobody has trusted ("Workspace not trusted. Run `claude` in … once and accept the trust
+  prompt"). The smoke's fresh temp roots are never trusted, so every launch is refused: the run
+  ends at `operator` and nothing is spent. Trust covers subdirectories, so point `TMPDIR` at a
+  directory under one you have trusted, as in `TMPDIR=<trusted dir>/.rider-smoke npm run smoke`.
+  An adopting project needs the same: run `claude` in it once before its first `rider start`.
 
 ## Verified on
 
 The claims the design leaves to be checked against a real install and a real account, filled in at
-release (§ numbers refer to the design notes, which are not shipped in this repo). Every row was
-measured before the per-instance state layout, and none has been rerun on it:
+release (§ numbers refer to the design notes, which are not shipped in this repo). The rows were
+measured before the per-instance state layout. Only the watcher row has been rerun on it, by the
+2026-10-20 smoke:
 
 | Claim | Where | Verified | Result |
 |---|---|---|---|
 | `/rider` resolves (or only `/rider:rider`) | §3.4 | 2026-09-04, Claude Code 2.1.260 | **PASS for `/rider:rider`** — a session launched with that prompt expanded the skill (the turn carries `<command-name>/rider:rider</command-name>` followed by the SKILL.md body) and went on to run the executor. Bare `/rider` was **not tried**, so it stays unverified; `plugin details rider` lists the component as `rider` |
 | `${CLAUDE_PLUGIN_ROOT}` expands in the skill's Bash calls; which allowlist line prevents prompts | §3.4 | 2026-09-04, Claude Code 2.1.260 | **Expansion PASS** — it reached the skill body already substituted, as an absolute forward-slash path, and every `node "…/scripts/rider.mjs"` call ran. It is the plugin's *install root*: installed from a local `directory` marketplace that is the checkout itself, not the `~/.claude/plugins/cache/` copy. **The allowlist question is not discriminated** — under `--permission-mode auto` no prompt appeared, so neither line was exercised; both are kept above. The GitHub-source install route was not exercised. |
-| The detached watcher outlives its spawning process | §4.6 | `npm run smoke` (the two watcher assertions) | **PASS as measured** — it outlived `rider start`, a `spawnSync`'d process that had already exited, and appended the phase's `done` event. The same shape was seen again in the live judge session. It was **not** measured against a judge session's own exit |
+| The detached watcher outlives its spawning process | §4.6 | `npm run smoke` (the two watcher assertions) | **PASS as measured** — it outlived `rider start`, a `spawnSync`'d process that had already exited, and appended the phase's `done` event. The same shape was seen again in the live judge session. It was **not** measured against a judge session's own exit. **Rerun on 2026-10-20** (Linux, Claude Code 2.1.304, the per-instance layout): PASS. The smoke's backgrounded `rider await` also exited 0 carrying the `waiting` event, and two instances' watchers each appended their own `done` event |
 | A backgrounded `rider await` wakes the judge | §3.3 | a live judge session (below) | **PASS** — `rider await` was armed with the Bash tool's `run_in_background`, exited 0 carrying the watcher's event line at `08:50:33.380Z`, the completion notification reached the judge at `08:50:35.313Z` (**1.9 s**), and it then ran `status`, `check` and `next "done" --because …` with nobody typing |
 | Git Bash runs the worked example's POSIX commands on Windows | §7 | `test/shell.test.mjs` | **PASS offline** — `test/shell.test.mjs` resolves Git Bash to `C:/Program Files/Git/bin/bash.exe` on this machine and runs POSIX lines of the worked example's shape (`test`, `$(…)` substitution, redirection, non-zero exit); the example's own `intake`/`evidence` lines are not run. Offline evidence only: the smoke rider declares no `intake` or `evidence` and never enters its human phase. |
 
