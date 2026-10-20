@@ -509,6 +509,8 @@ contend on `.git/index.lock`; staging explicit paths and retrying is the adopter
 
 ## Upgrading from the v3 layout
 
+The per-instance layout arrived in 0.2.0. Every 0.1.x release used the earlier layout, v3.
+
 There is no migration. The earlier layout, v3, kept one `.rider/<name>/run.json` file per rider; an
 executor that finds such a file refuses every verb, naming it: finish or `reset` that run with the
 old version first, then remove `.rider/<name>/` (move its `runs/` aside first to keep the history;
