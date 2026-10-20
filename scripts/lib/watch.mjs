@@ -1,4 +1,5 @@
 // scripts/lib/watch.mjs
+import { pollAwait } from "./await.mjs";
 import { check, respawnWatcher, RUN } from "./check.mjs";
 import { currentKey } from "./keys.mjs";
 import { fmtDuration } from "./markers.mjs";
@@ -34,15 +35,21 @@ function emitCheckFailure(ctx, message) {
 }
 
 /** The detached watcher's loop (§4.5, §4.6, §13): polls `check`, owns the rate-limit wait, appends wake events.
- *  Every check and every emission is its own locked write; the sleeps between them hold nothing. */
-export function watchLoop(ctx, { maxWaitHours = 6, pollMs = 30_000, maxResumes = 3, maxCheckFailures = 5, log = () => {} } = {}) {
+ *  Every check and every emission is its own locked write; the sleeps between them hold nothing. At an await phase it
+ *  polls the wait's check instead (§7.5), at that phase's `pollSeconds`: the one watcher spans both kinds, and picks its
+ *  interval from the kind of whatever the run now runs. `failuresBeforeWake` is `local.json`'s `awaitCheckFailures`. */
+export function watchLoop(ctx, { maxWaitHours = 6, pollMs = 30_000, maxResumes = 3, maxCheckFailures = 5, failuresBeforeWake = 3, log = () => {} } = {}) {
   let failures = 0;
   for (;;) {
-    // A throw here (a transient registry read, a malformed transcript line) must not kill the watcher
-    // silently: retry a bounded number of times, then leave an event the judge will see.
+    // A throw here (a transient registry read, a malformed transcript line, a corrupt state.json) must not kill the
+    // watcher silently: retry a bounded number of times, then leave an event the judge will see.
     let r;
+    let polled = null;
     try {
-      r = check(ctx, { readouts: false });
+      // Decided from the stored run, before `check`, which classifies sessions in one locked hold: a wait's check runs with nothing held (§7.3).
+      const stored = ctx.loadRun();
+      if (stored && ctx.rider.phases[stored.phase]?.kind === "await") polled = pollAwait(ctx, { threshold: failuresBeforeWake });
+      else r = check(ctx, { readouts: false });
       failures = 0;
     } catch (e) {
       failures++;
@@ -53,6 +60,13 @@ export function watchLoop(ctx, { maxWaitHours = 6, pollMs = 30_000, maxResumes =
         return { ok: false, state: "watcher-stopped", error: e.message, event };
       }
       ctx.sleep(pollMs);
+      continue;
+    }
+    if (polled) {
+      // A tick whose run moved on is left to finish, and its poll is not committed (§7.3.1): watch what the run now runs.
+      if (polled.moved) { log(MOVED_ON_WATCHING); continue; }
+      if (polled.outcome === "ready" || polled.outcome === "timed-out") { log(`${polled.outcome}: ${polled.key}`); return { ok: true, state: polled.outcome, key: polled.key, phase: polled.phase }; }
+      ctx.sleep(ctx.rider.phases[polled.phase].pollSeconds * 1000);
       continue;
     }
     if (r.state === "none" || r.state === "human") { log(`nothing to watch (${r.state})`); return r; }
@@ -124,10 +138,13 @@ function waitsOnReset(ctx, run) {
 
 /** What the judge backgrounds (§3.3, §13): block until the watcher's next wake event, or until the phase is past
  *  running. It reads without the lock; only a respawn writes. An await that returned at once on a reset the watcher
- *  waits for would be re-armed and return again, with no event in between. */
-export function awaitEvent(ctx, { maxMinutes = 60, pollMs = 10_000 } = {}) {
+ *  waits for would be re-armed and return again, with no event in between. With no `maxMinutes`, the heartbeat is the
+ *  phase kind's (§16 C13): a wait may last days, and an hourly heartbeat would re-arm the judge dozens of times. */
+export function awaitEvent(ctx, { maxMinutes = null, pollMs = 10_000 } = {}) {
   const baseline = ctx.readEvents().reduce((max, e) => (Number.isInteger(e.seq) && e.seq > max ? e.seq : max), 0);
-  const deadline = ctx.now().getTime() + maxMinutes * 60_000;
+  const seen = ctx.loadRun();
+  const minutes = maxMinutes ?? (seen && ctx.rider.phases[seen.phase]?.kind === "await" ? 360 : 60);
+  const deadline = ctx.now().getTime() + minutes * 60_000;
   for (;;) {
     const events = ctx.readEvents().filter((e) => e.seq > baseline && WAKE_KINDS.includes(e.kind));
     if (events.length) return { ok: true, state: "event", events };
@@ -141,7 +158,7 @@ export function awaitEvent(ctx, { maxMinutes = 60, pollMs = 10_000 } = {}) {
     // while this await heart-beats forever: respawn it here exactly as `check` does, under the lock and on
     // the run as it is once the lock is held.
     if (!ctx.watcherAlive()) ctx.update(() => { const fresh = ctx.loadRun(); if (isLive(fresh, ctx.rider)) respawnWatcher(ctx, fresh, currentSession(fresh)); });
-    if (ctx.now().getTime() >= deadline) return { ok: false, state: "timeout", minutes: maxMinutes };
+    if (ctx.now().getTime() >= deadline) return { ok: false, state: "timeout", minutes };
     ctx.sleep(pollMs);
   }
 }

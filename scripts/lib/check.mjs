@@ -196,8 +196,8 @@ function noteWorkBranch(ctx, run) {
 
 /** For a rider with instances (§11.1): a shared tree off the run's base is drift, dated from its first sighting of
  *  that branch and cleared once a check finds the base again. Returns whether the run changed, so an idle poll writes
- *  nothing. */
-function noteBranchDrift(ctx, run) {
+ *  nothing. The watcher's poll of a wait notes it too (`pollAwait`). */
+export function noteBranchDrift(ctx, run) {
   const now = ctx.branch();
   if (now && run.baseBranch && now !== run.baseBranch) {
     if (run.branchDrift?.branch === now) return false;

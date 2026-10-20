@@ -24,7 +24,7 @@ test("paths: one directory per instance under the rider's, laid out as §6", () 
     checkPid: join(d, "check.pid"), checkOut: join(d, "logs", "check.out"),
   });
   assert.equal(endedRunPath(instancePaths("/p", "lemmaria", "alpha"), { runId: "ab12", startedAt: "2026-10-19T12:00:00.000Z" }), join(d, "runs", "2026-10-19T12-00-00-000Z-ab12.json"));
-  assert.deepEqual(WAKE_KINDS, ["done", "gone", "waiting", "intervened", "rate-limited", "watcher-stopped"]);
+  assert.deepEqual(WAKE_KINDS, ["done", "gone", "waiting", "intervened", "rate-limited", "watcher-stopped", "ready", "timed-out", "check-failing"]);
   assert.deepEqual(emptyState({ rider: "lemmaria", instance: "alpha", scope: "nodes/alpha" }), { schema: 5, rider: "lemmaria", instance: "alpha", scope: "nodes/alpha", version: 0, updatedAt: null, run: null, lastRun: null });
 });
 

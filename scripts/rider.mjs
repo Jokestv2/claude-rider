@@ -35,7 +35,8 @@ const USAGE = `rider — drive riders/<name>/RIDER.md one phase at a time (run f
                    refused when the instance has moved on since
   --by judge|operator  who decided, recorded on the transition (default judge; operator for the operator's own ruling)
   --dry-run        start/next/resume/overrule print the harness command and run nothing
-  --max-minutes N  await's deadline in minutes (default 60)  --binding <path>  another harness module (or RIDER_BINDING)
+  --max-minutes N  await's deadline in minutes (default 360 at an await phase, else 60)
+  --binding <path>  another harness module (or RIDER_BINDING)
 exit: 0 ok · 2 refused or usage · 3 await timed out`;
 
 /** `--because "-x is missing"` is a value, not a flag; parseArgs alone calls it ambiguous and refuses.
@@ -79,8 +80,9 @@ export async function main(argv = process.argv.slice(2), { cwd = process.cwd(), 
     if (pick) return fail(`no rider named ${pick}; have: ${have || "none"}`);
     return fail(riders.length ? `several riders here: ${have} — pass --rider <directory name>` : `no riders/*/RIDER.md under ${cwd}`);
   }
-  const maxMinutes = Number(cli.flags["max-minutes"] ?? 60);
-  if (!Number.isFinite(maxMinutes) || maxMinutes <= 0) return fail(`--max-minutes must be a positive number\n${USAGE}`);
+  // No default here: absent, `awaitEvent` picks it from the phase kind (§7.5), which is known only once the run is read.
+  const maxMinutes = cli.flags["max-minutes"] === undefined ? null : Number(cli.flags["max-minutes"]);
+  if (maxMinutes !== null && (!Number.isFinite(maxMinutes) || maxMinutes <= 0)) return fail(`--max-minutes must be a positive number\n${USAGE}`);
   try {
     const rider = loadRider(found.file);
     const instance = resolveInstance(cwd, rider, cli.flags.instance);
@@ -144,7 +146,7 @@ function runWatch(ctx, local, stdout) {
   ctx.update(() => writeWatchPid(ctx.paths, process.pid));
   const log = (m) => stdout(`${new Date().toISOString()} ${m}`);
   try {
-    watchLoop(ctx, { maxWaitHours: local.maxWaitHours, pollMs: local.pollSeconds * 1000, log });
+    watchLoop(ctx, { maxWaitHours: local.maxWaitHours, pollMs: local.pollSeconds * 1000, failuresBeforeWake: local.awaitCheckFailures, log });
     return 0;
   } finally {
     ctx.update(() => { if (existsSync(watchPid) && readFileSync(watchPid, "utf8").trim() === mine) rmSync(watchPid, { force: true }); });

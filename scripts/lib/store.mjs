@@ -5,8 +5,9 @@ import { hostname } from "node:os";
 import { dirname, join } from "node:path";
 import { bootTime, isAlive, sleepSync, writtenBeforeBoot } from "./proc.mjs";
 
-/** The events the watcher appends and `await` wakes on; every other kind is a record of a committed write (§6.2). */
-export const WAKE_KINDS = ["done", "gone", "waiting", "intervened", "rate-limited", "watcher-stopped"];
+/** The events the watcher appends and `await` wakes on; every other kind is a record of a committed write (§6.2). The
+ *  last three are a wait's (§7.6): its check passed, its deadline passed, or its check kept failing. */
+export const WAKE_KINDS = ["done", "gone", "waiting", "intervened", "rate-limited", "watcher-stopped", "ready", "timed-out", "check-failing"];
 
 /** Rider-level files: what all of a rider's instances share, and where v3 kept its one run. */
 export function riderPaths(root, rider) {
