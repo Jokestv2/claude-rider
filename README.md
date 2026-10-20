@@ -158,9 +158,11 @@ next poll. Such a rider's `check` reads its own directory:
 
 What the executor surfaces instead is **branch drift**: every `check` of an instance (the watcher's polls,
 and checks at a human phase or on a stopped stretch, included) that finds the tree on a branch
-other than the run's base records it, and `rider board` lists the instance under *needs you* —
-"the shared working tree left `<base>` for `<branch>`". The executor does not switch back; a later
-`check` back on the base clears it.
+other than the run's base records it, with the time it was first seen. `rider status` and
+`rider check` print it on a `drift:` line (`branchDrift` under `--json`), and `rider board` lists the
+instance under *needs you*, keeping the row's own reason and adding "the shared working tree left
+`<base>` for `<branch>`" to it. The executor does not switch back; a later `check` back on the base
+clears it. The board never runs git itself, so it shows what the instance's last check found.
 
 Two names are reserved and never declared as phases or as edge labels:
 
@@ -173,7 +175,8 @@ Two names are reserved and never declared as phases or as edge labels:
 The rate-limit message shapes the classifier recognises are Claude Code 2.1.260's known strings;
 none of them has been observed live in this project (no 429 was hit while it was built). A shape it
 does not recognise reads `done` with "no STATUS line in the final message" — the judge relays that,
-and you resume the session by hand with `rider resume`.
+and you resume the session by hand: `rider resume --on <key> --by operator`, the key copied from
+`rider check`'s `decide with:` line.
 
 The graph is validated when the rider loads, and an invalid rider is refused with the reason before
 anything runs: `name` equals the rider's directory name; a phase name is letters, digits, underscores
@@ -239,8 +242,9 @@ not:
 Open a Claude Code session at the project root and type `/rider:rider`. The skill re-orients from
 `rider status`, starts the run, arms a background watch, judges each finished phase, and stops for
 you at a human phase or at `operator`. For a rider that declares instances, open one session per
-instance you want driven and type `/rider:rider <id>`; `/rider:rider` with no argument is then
-**board mode** — your view of every instance, which acts only on your word and arms no watch.
+instance you want driven and type `/rider:rider <id>`. When a rider declares instances or the
+project has several riders, `/rider:rider` with no argument is **board mode** — your view of every
+instance, which acts only on your word and arms no watch.
 
 ## The YAML subset
 
@@ -299,9 +303,10 @@ decide with:  rider next <label> --instance a --on c1d1.1 --because "…"     (l
 
 That line, the moves printed after an `operator` stop, `status`'s `next:` line and the board's hints
 carry `--rider` when the project has several riders and `--instance` when the rider declares
-instances, so each runs as printed. Text `status` names the run id in its first line
-(`rider <name>/<runId>`); the stretch key is in `status --json` (`key`) and on `check`'s
-`decide with:` line.
+instances, so each runs as printed. Text `status` and `check` name the rider, the instance and the
+run in their first line — `rider <name>/<instance>/<runId>`, as event lines and session names do,
+`default` for a rider without instances — and `status` adds the current stretch (`stretch <key>`;
+`key` under `--json`).
 
 `--by judge|operator` on `next`, `resume` and `reset` records who decided on the transition; the
 default is `judge`, so pass `--by operator` for your own ruling. `overrule` is always recorded as
@@ -315,28 +320,32 @@ rate-limit resume) as `executor`.
 
 | Group | When |
 |---|---|
-| **needs you** | branch drift; an active run at a human phase; the last run ended at `operator`; a stretch `waiting` on a question; a running stretch whose watcher is not alive; a stopped stretch that was `intervened` (rate-limited or not); a rate-limited stretch whose watcher gave up or died; **undecided** — a `done` or `gone` stretch that stopped more than `staleDecisionMinutes` ago (default 20, `local.json`) with no decision: its judge has most likely died |
+| **needs you** | branch drift (added to the row's own reason, which stays); an active run at a human phase; the last run ended at `operator`; a stretch `waiting` on a question; a running stretch whose watcher is not alive; a stopped stretch that was `intervened` (rate-limited or not); a rate-limited stretch whose watcher gave up or died; **undecided** — a `done` or `gone` stretch that stopped more than `staleDecisionMinutes` ago (default 20, `local.json`) with no decision: its judge has most likely died |
 | **orphaned** | state under `.rider/<rider>/` whose instance directory no longer exists |
 | **needs its judge** | a `done` or `gone` stretch that stopped more recently than that, with no decision yet |
 | **running** | a running stretch with a live watcher, or a rate-limited one whose live watcher waits for the reset (with the reset time) |
 | **idle** | no active run: the last one ended by a passing check or by `reset`, or the instance never ran |
 
-Each row shows the rider, instance and scope, the phase, how long it has been in this state, what
-it waits on, the latest decision (label, `by`, `because`), the run's cost and the instance's total,
-the watcher's pid, and — for a stretch that waits on a decision — its `decide with:` line. Directories
-the glob matched but skipped (an unsafe or reserved name) are listed with the reason, and a rider
-whose `RIDER.md` does not load, or whose state is the v3 layout, is an error entry while every other
-rider is still listed.
+Each row shows the rider, instance and scope, the phase, how long it has been in this state, what it
+waits on, the latest decision (label, `by`, `because`), the run's cost and the instance's total, the
+watcher's pid, and — for a *needs its judge* or *undecided* row — its `decide with:` line. A ruling
+on any other row takes its `--on` from the instance: the stretch key from
+`rider check --instance <id>`'s `decide with:` line, the run id from `rider status --instance <id>`.
+Directories the glob matched but skipped (an unsafe or reserved name) are listed with the reason,
+and a rider whose `RIDER.md` does not load, or whose state is the v3 layout, is an error entry while
+every other rider is still listed.
 
 The board only reads: no lock, no `claude` call, nothing written. Its *running* is therefore what
 the watcher last recorded, not a fresh poll; the row says how long ago the state was written and
-whether the watcher is alive.
+whether the watcher is alive. That is a liveness check of the pid in `watch.pid`, nothing more: it
+says a watcher process exists for the instance, not what it last looked at.
 
 **`rider board --json` is the stable interface for a dashboard.** It is versioned:
 `{ board: 1, generatedAt, riders, rows, skipped, errors }`, where `riders` names every rider
 directory found, a row is `{ rider, instance, scope, category, phase, runId, since, waitsOn,
-decision: { label, because, by } | null, runCost, instanceCost, key, decideWith, watcher, updatedAt,
-statePath }`, a skipped entry is `{ rider, path, reason }`, and an error is
+decision: { label, because, by } | null, runCost, instanceCost, key, decideWith,
+drift: { branch, at } | null, watcher, updatedAt, statePath }` (`drift.at` is when a check first saw
+the tree on that branch), a skipped entry is `{ rider, path, reason }`, and an error is
 `{ rider, instance?, error }`. The files under `.rider/` are documented below, but internal.
 
 ## `local.json`
@@ -409,18 +418,21 @@ counting from 1 per instance and `key` naming the stretch the event concerns. It
 families: **wake events**, which the watcher appends and `rider await` wakes on — `done`, `gone`,
 `waiting`, `intervened`, `rate-limited`, `watcher-stopped` — and **record events**, which every
 committed write appends — `run-started`, `phase-entered`, `decided`, `overruled`, `resumed`, `noted`,
-`run-ended`, `reset`, and `refused` for a decision refused by its key. An instance's timeline can be
-drawn from this file alone.
+`run-ended`, `reset`, and `refused` for a decision refused by its key. A `refused` event also
+carries `by`, who sent the decision: `judge`, `operator`, or `executor` for the watcher's own
+resume. An instance's timeline can be drawn from this file alone.
 
-**One writer at a time per instance.** Every write goes through one store, under the instance's lock:
-the file `lock`, made by exclusive create and naming its holder's pid, host and acquisition time. Each
-verb holds it for its whole duration, its `claude` calls included: a launch (`start`, `next`,
-`resume`, `overrule`) holds it longest, about 45 s in the worst case, and a `check` about 20 s. No
-wait is ever held across it — not the watcher's poll sleep or rate-limit wait, not `await`'s poll,
-not the judge's thinking: decisions are protected by their keys instead. `evidence` and `show` run
-after it is released; a human phase's `check` runs inside it, since its exit decides whether the run
-ends. A verb that finds the instance locked retries about every 200 ms for 60 s, then refuses with
-`instance <id> is locked by pid N on <host> since <time>`. A stale lock is broken only when its
+**One writer at a time per instance.** Every write goes through one store, under the instance's
+lock: the file `lock`, made by exclusive create and naming its holder's pid, host and acquisition
+time. Each writing verb holds it for its whole duration, its `claude` calls included: a launch
+(`start`, `next`, `resume`, `overrule`) holds it longest, typically about 45 s, and a `check` about
+20 s. Neither is a bound: each `claude` call is capped at 120 s, a launch makes several (up to 30
+registry polls among them), and slow `intake` or human-phase `check` commands run inside the hold
+too. No wait is ever held across it — not the watcher's poll sleep or rate-limit wait, not `await`'s
+poll, not the judge's thinking: decisions are protected by their keys instead. `evidence` and `show`
+run after it is released; a human phase's `check` runs inside it, since its exit decides whether the
+run ends. A verb that finds the instance locked retries about every 200 ms for 60 s, then refuses
+with `instance <id> is locked by pid N on <host> since <time>`. A stale lock is broken only when its
 holder ran on this host and that pid is dead; a live pid's lock, or one from another host, is never
 broken. Reads — `status`, `board`, and `await` unless it respawns a dead watcher — take no lock:
 `state.json` and `runs/` files only ever change by an atomic rename.
@@ -455,10 +467,10 @@ history simplification; the commits it brings in are.
 **Known limit:** the rate-limit wait lives in the watcher process. The resume at the reset is
 guaranteed only while that process lives; a watcher killed mid-wait resumes nothing by itself, and
 nothing respawns one for it — `check` returns early for a session already recorded `rate-limited`,
-and `rider await` only watches a running or waiting one. The run is not stranded: `rider board`
-lists it under *needs you*, `rider status` shows the stretch `rate-limited` and `rider check` its
-stored reset time, and `rider resume --on <key>` starts a new stretch in the same session — the judge asks
-the operator before running it (see the skill).
+and `rider await` waits on a rate-limited stretch only while its watcher is alive. The run is not
+stranded: `rider board` lists it under *needs you*, `rider status` shows the stretch `rate-limited`
+and `rider check` its stored reset time, and `rider resume --on <key>` starts a new stretch in the
+same session — the judge asks the operator before running it (see the skill).
 
 **Known limit:** a watcher whose `check` keeps failing can cycle. The watcher gives up after five
 consecutive `check` failures and appends a `watcher-stopped` event (`watcher giving up: …`); the

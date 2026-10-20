@@ -47,6 +47,9 @@ rules are unchanged by anything the operator typed.
 1. **Re-orient from the executor, never from chat memory.** Run `rider status --instance <id>`
    (plain `rider status` for a rider without instances). The conversation autocompacts; the
    instance's state under `.rider/` is the only memory.
+   A `drift:` line in `status` or `check` means the shared working tree has left the run's base
+   branch. Relay it to the operator, and never switch or touch the branch yourself: the tree is
+   every instance's. Whatever `check` printed as evidence was read on that branch.
    Then read the body of `riders/<name>/RIDER.md` — the prose under the frontmatter — once per
    invocation: it states the task class and what each label means, and you judge against that.
 2. Act on `state:`
@@ -61,9 +64,10 @@ rules are unchanged by anything the operator typed.
    - **running** → arm the watch (step 3) and stop. There is nothing to judge yet.
    - **finished** → `rider check`. Read the block: the state, the status hint, the final message,
      the evidence, the legal labels. Pick **exactly one** listed label, then decide by copying the
-     block's last line, `decide with:  rider next <label> … --on <key> --because "…"`: put the label
-     in place of `<label>` (quoted) and one line in `--because` — what in the message and evidence
-     decided it. **Never assemble a key**, and never reuse one from an earlier check: it names the
+     command after `decide with:`, from `rider next` to `--because "…"`, and not its
+     `(labels: …)` tail, which is a bash syntax error if copied: put the label in place of
+     `<label>` (quoted) and one line in `--because` — what in the message and evidence decided
+     it. **Never assemble a key**, and never reuse one from an earlier check: it names the
      stretch you judged, and the executor refuses a decision on any other.
      Then arm the watch (step 3) and stop — unless `next` reached a human phase or `operator`, in
      which case relay what it printed and stop.
@@ -102,11 +106,14 @@ exist (`rider start` refuses a human phase, and `rider next` needs an active run
 - **`rider start [phase]`** — a fresh run, once whatever stopped this one is dealt with (a design
   question answered, a phase to be run again).
 
+## The operator's word while a run is active
+
 **A `next`, `resume` or `reset` run on the operator's explicit word carries `--by operator`**, with
 their words as `--because`: a resume they asked for, or `rider reset --on <runId> --by operator --because "…"` to
-forget the active run (the run id is in `status`'s first line, `rider <name>/<runId>`). Never reset
-on your own initiative. A reset of a live phase leaves its session running and paying; relay the
-stop command the executor prints. (`overrule` records the operator by itself.)
+forget the active run (the run id is in `status`'s first line, `rider <name>/<instance>/<runId>`).
+Never reset on your own initiative. A reset of a live phase leaves its session running and paying;
+relay the stop command the executor prints. (`overrule` records the operator by itself.) With no
+active run there is nothing to reset: a reset sent anyway is refused, and the refusal is recorded.
 
 ## When a decision is refused
 
@@ -142,6 +149,10 @@ opened when they want it.
   and `--on`:
   - A ruling they give — take this edge, resume, reset — carries `--by operator`, with their words
     as `--because`. `overrule` records the operator by itself.
+  - A ruling needs its `--on`. A **needs its judge** or **undecided** row prints its `decide with:`
+    line; for any other row (intervened, a watcher that gave up, a human phase) take the stretch
+    key from `rider check --instance <id>`'s `decide with:` line and the run id from
+    `rider status --instance <id>`.
   - When they ask you to judge a stretch yourself (an undecided one, say), run `rider check
     --instance <id>`, read the block as any judge would (*Reading a finished phase*), and copy its
     `decide with:` line; `--by judge` is the default. Judge from the block, never from a board row.
@@ -177,8 +188,10 @@ opened when they want it.
   confirms a stop the session never signed before it acts on it, because acting means stopping
   the session. Arm the watch and stop.
 - **`gone`** is a killed session: pick `resume` (the executor re-enters the same session).
-- **`rate-limited`** means the watcher gave up (three resumes, or a reset past its cap). Tell the
-  operator the reset time in the block and stop; when they say so, run
+- **`rate-limited`**: look at the watcher in `status`. **Alive** — it is waiting for the reset and
+  resumes the session itself: do not decide; arm the watch (step 3), which waits with it until the
+  watcher's next event, and stop. **None** — the watcher gave up (three resumes, or a reset past
+  its cap) or died: tell the operator the reset time in the block and stop; when they say so, run
   `rider resume --on <key> --by operator`, the key copied from the block's `decide with:` line.
 - **`intervened`** means a user-role turn beyond the launch reached the session. `check` prints them
   under `── human turns ──`. **Read them before doing anything else.** If the block says
