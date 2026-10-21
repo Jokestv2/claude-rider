@@ -645,7 +645,7 @@ optional; the defaults are:
 | `maxWaitHours` | `6` | The watcher gives up on a rate-limit reset further away than this and emits `rate-limited` for the operator |
 | `pollSeconds` | `30` | The watcher's poll interval at a session phase. An await phase is polled at its own `pollSeconds`, declared in `RIDER.md` |
 | `staleDecisionMinutes` | `20` | How long a stopped stretch, or a ready or timed-out wait, may wait for its judge's decision before `rider board` calls it undecided and lists it under *needs you* |
-| `awaitCheckFailures` | `3` | How many await-check errors in a row make a wait's check *failing*: one `check-failing` event for the streak, a `check failing:` line in `status` and `check`, and a *needs you* row on the board |
+| `awaitCheckFailures` | `3` | How many await-check errors in a row make a wait's check *failing*: one `check-failing` event for the streak, a `check failing:` line in `status` and `check`, and a *needs you* row on the board. A positive integer: any other value is refused, with the file named |
 | `shell` | `null` | The shell every command a rider declares runs in; `null` means the resolved default (see *Platforms*) |
 
 Keys not listed here are kept in the file but unused. The watcher's other give-up rule — three

@@ -1,7 +1,7 @@
 // test/state.test.mjs
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { chainCost, chainResumes, consecutiveRateLimitResumes, currentSession, isLive, keyOf, loadLocal, newRun, riderEnv, totalCost, writeLog } from "../scripts/lib/state.mjs";
 import { readJson, riderPaths } from "../scripts/lib/store.mjs";
 import { FakeBinding } from "./fake-binding.mjs";
@@ -32,6 +32,21 @@ test("a run is created, saved, ended into runs/, and found again as the last end
     assert.ok(existsSync(log));
     assert.deepEqual(readJson(log), { a: 1 });
     assert.deepEqual(loadLocal(riderPaths(p.root, "lemmaria")), { maxWaitHours: 6, pollSeconds: 30, models: {}, advisor: null, launchArgs: [], claudePath: null, shell: null, permissionMode: "auto", staleDecisionMinutes: 20, awaitCheckFailures: 3 });
+  } finally { p.cleanup(); }
+});
+
+test("local.json's awaitCheckFailures must be a positive integer", () => {
+  // A null would slip past every default (a default fills only undefined) and make each awaiting wait read as failing.
+  const p = tmpProject();
+  try {
+    const rp = riderPaths(p.root, "lemmaria");
+    mkdirSync(rp.dir, { recursive: true });
+    for (const bad of [null, 0, -1, 1.5, "3"]) {
+      writeFileSync(rp.local, JSON.stringify({ awaitCheckFailures: bad }));
+      assert.throws(() => loadLocal(rp), { message: `${rp.local}: awaitCheckFailures must be a positive integer (got ${JSON.stringify(bad)})` });
+    }
+    writeFileSync(rp.local, JSON.stringify({ awaitCheckFailures: 5 }));
+    assert.equal(loadLocal(rp).awaitCheckFailures, 5);
   } finally { p.cleanup(); }
 });
 

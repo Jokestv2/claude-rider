@@ -18,6 +18,7 @@ function readPid(path) {
 export function writeWatchPid(paths, pid) { writeJsonAtomic(paths.watchPid, pid); }
 
 /** After a reboot the pid in a surviving watch.pid can name an unrelated process (§7.10); the file is replaced whole, so its mtime is when it was written.
+ *  The rule rests on the wall clock and on a local filesystem: a clock stepped forward, or a network filesystem's own mtime clock, can misdate the file.
  *  The board and status read it with no lock, while `killWatcher` may be removing it. */
 export function watcherAlive(paths, alive = isAlive, { bootMs = bootTime() } = {}) {
   const pid = readPid(paths.watchPid);

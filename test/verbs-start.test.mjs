@@ -5,6 +5,7 @@ import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { newRun } from "../scripts/lib/state.mjs";
 import { emptyState, endedRunPath, writeJsonAtomic, writeState } from "../scripts/lib/store.mjs";
+import { render } from "../scripts/lib/render.mjs";
 import { reset, start } from "../scripts/lib/verbs.mjs";
 import { FakeBinding } from "./fake-binding.mjs";
 import { FACT_A, INSTANCE_RIDER_MD, TEST_RIDER_MD, makeCtx, requiring, tmpProject } from "./helpers.mjs";
@@ -312,6 +313,9 @@ test("locate may name a gate: the run starts at the human phase, with no handoff
   const { ctx, binding } = located(t, { where: "merge" });
   const r = start(ctx);
   assert.deepEqual([r.ok, r.state, r.phase, r.show], [true, "human", "merge", "SHOW-OUTPUT"]);
+  // The pre-flight ran the gate's check and saw it fail: the block says so, not "not run yet".
+  assert.deepEqual([r.checkExit, r.checkOutput], [1, ""]);
+  assert.match(render("start", r), /^check: test -f merged\.flag   \(exit 1 — the run ends when it exits 0\)$/m);
   assert.equal(binding.calls.length, 0, "a gate launches nothing");
   const run = ctx.loadRun();
   assert.equal(run.handoff, null, "no session handed anything over");

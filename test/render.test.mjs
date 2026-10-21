@@ -92,7 +92,9 @@ test("running, none, human and refusal render short", () => {
   assert.match(render("check", { state: "human", rider: "lemmaria", instance: "a", runId: "3f2a", phase: "merge", check: "git merge-base --is-ancestor HEAD main", checkExit: 1, checkOutput: "", show: "3 files changed", notes: [], totalCost: 187 }), /^rider lemmaria\/a\/3f2a · phase merge is yours[\s\S]*check: git merge-base[\s\S]*3 files changed[\s\S]*total cost: \$187\.00/);
   assert.equal(render("next", { ok: false, error: "nope" }), "refused: nope");
   assert.match(render("status", { ok: true, state: "none", rider: "lemmaria", instance: "a", watcher: null, lastEvent: null, lastRun: null }), /^rider lemmaria\/a · no active run/);
-  assert.match(render("await", { ok: false, state: "timeout", minutes: 60 }), /no event in 60 min/);
+  assert.equal(render("await", { ok: false, state: "timeout", minutes: 60 }), "no event in 60 min; the phase is still running — re-arm rider await");
+  // At a wait nothing runs: the heartbeat says there is nothing to judge yet.
+  assert.equal(render("await", { ok: false, state: "timeout", minutes: 360, atWait: true }), "no event in 360 min; nothing is ready to judge yet — re-arm rider await");
 });
 
 test("status names the instance and the current stretch in its first line", () => {
@@ -171,6 +173,9 @@ test("the block printed on entering a human phase carries the drift line, and st
   assert.doesNotMatch(render("next", { ...human, branchDrift: null }), /drift:/);
   const started = render("start", { ...human, branchDrift: null, note: "located build; entering merge on the operator's word" }).split("\n");
   assert.deepEqual(started.slice(0, 2), ["note: located build; entering merge on the operator's word", "rider lemmaria/a/3f2a · phase merge is yours"]);
+  // Entered by an edge, the check has not run; a start at the gate carries the pre-flight's exit, which did.
+  assert.equal(render("next", { ...human, branchDrift: null }).split("\n")[1], "check: test -f merged.flag   (not run yet: rider check runs it — the run ends when it exits 0)");
+  assert.deepEqual(render("start", { ...human, branchDrift: null, checkExit: 1, checkOutput: "no merged.flag" }).split("\n").slice(1, 3), ["check: test -f merged.flag   (exit 1 — the run ends when it exits 0)", "  no merged.flag"]);
 });
 
 test("an entry that lands on a wait prints the check it waits on, never a session", () => {

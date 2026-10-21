@@ -179,7 +179,8 @@ test("a decision between the watcher's check and its emit: no event for the deci
   const t = setup([{ statuses: ["done"], read: { lastText: GREEN } }, { statuses: ["running", "done"], read: { lastText: "STATUS: code green\n<promise>X</promise>", turns: 9 } }]);
   const judge = makeCtx({ root: t.p.root, binding: t.binding, clock: t.clock });
   const { runId } = start(t.ctx);
-  // `next` spawns no watcher for build while this one lives, between its check and its emit: this one has to watch it.
+  // The judge's `next` lands between this watcher's check and its emit, and its context spawns no watcher (makeCtx's
+  // stub), as `next` spawns none in production while this one lives: this one has to watch build.
   const seam = decideBeforeEmit(t, judge, "done");
   const out = watchLoop(t.ctx, opts(t));
   assert.equal(seam.decided, true);

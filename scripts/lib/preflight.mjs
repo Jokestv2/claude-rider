@@ -38,7 +38,8 @@ export function requiresFor(ctx, { run, to, from = "", label = "" }) {
 
 /** What `next` and `overrule` check before the lock (§4): the requires of the phase `label` leads to from `run`'s phase.
  *  Only a declared edge to a phase has any: `resume` re-enters a phase already admitted (§5.2), and `operator` is no
- *  phase. Null when no command ran; the hold then refuses any target that has requires. */
+ *  phase. Null when `label` names no edge to a declared phase; the hold then refuses any target that has requires. A
+ *  target with no requires gets a passing result, with no command run. */
 export function edgePreflight(ctx, run, { on, label }) {
   const edges = ctx.rider.phases[run.phase]?.edges;
   // Own keys only: a label like "toString" must not read through Object.prototype.
@@ -63,9 +64,9 @@ function locate(ctx, baseBranch) {
 
 /** What `start` checks before it takes the lock (§4), in its order: the target (the operator's phase, else `locate`'s,
  *  else `start:`), then intake, then the target's own door, so a slow entry command never holds the lock. It reads no
- *  state: the verb's hold re-checks that no run is active. `entry` records how the target was chosen, and `note` a
- *  `locate` the operator's word overrode. A refusal's `cause` names the entry command that refused; a usage error (an
- *  unknown phase, a phase `start` cannot enter) has none. */
+ *  state: the verb's hold re-checks that no run is active. `entry` records how the target was chosen, `note` a `locate`
+ *  the operator's word overrode, and `gate` a gate's failed check, `{ status, output }`. A refusal's `cause` names the
+ *  entry command that refused; a usage error (an unknown phase, a phase `start` cannot enter) has none. */
 export function startPreflight(ctx, { phase = null } = {}) {
   const refused = (error, cause = null, target = null) => ({ ok: false, error, cause, target });
   // Own keys only, as for an edge's label. A usage error runs nothing, `locate` included.
@@ -90,14 +91,18 @@ export function startPreflight(ctx, { phase = null } = {}) {
     const r = sh(cmd, ctx.shellOpts({ phase: target, baseBranch }));
     if (r.status !== 0) return refused(`intake check failed (exit ${r.status}): ${cmd}${r.output ? `\n${r.output}` : ""}`, "intake", target);
   }
+  let gate = null;
   if (def.kind === "human") {
     // A gate has no requires; its check is its door, and it must fail. A passed gate would end the run on the first
     // check, and a locate that keeps naming it would loop the judge (§6.2). It runs as `check` runs it, with `sh`'s 30 s.
-    if (sh(def.check, ctx.shellOpts({ phase: target, baseBranch })).status === 0) return refused(`${target}'s check already passes; nothing waits on the operator there`, "gate", target);
+    const r = sh(def.check, ctx.shellOpts({ phase: target, baseBranch }));
+    if (r.status === 0) return refused(`${target}'s check already passes; nothing waits on the operator there`, "gate", target);
+    // The block `start` prints reports this run of the check, as `rider check`'s would.
+    gate = { status: r.status, output: r.output };
   } else {
     // A session phase or a wait. The run's door first, then the phase's: a fresh run leaves no phase and takes no label.
     const req = requiresFor(ctx, { run: { phase: target, baseBranch }, to: target });
     if (!req.ok) return refused(req.error, req.cause, target);
   }
-  return { ok: true, target, baseBranch, entry, note };
+  return { ok: true, target, baseBranch, entry, note, gate };
 }

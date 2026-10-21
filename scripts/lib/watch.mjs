@@ -168,7 +168,8 @@ export function awaitEvent(ctx, { maxMinutes = null, pollMs = 10_000 } = {}) {
     // while this await heart-beats forever: respawn it here exactly as `check` does, under the lock and on
     // the run as it is once the lock is held.
     if (!ctx.watcherAlive()) ctx.update(() => { const fresh = ctx.loadRun(); if (isLive(fresh, ctx.rider)) respawnWatcher(ctx, fresh, currentSession(fresh)); });
-    if (ctx.now().getTime() >= deadline) return { ok: false, state: "timeout", minutes };
+    // At a wait nothing runs, so the heartbeat says so (`atWait`): its words are render's.
+    if (ctx.now().getTime() >= deadline) return { ok: false, state: "timeout", minutes, ...(ctx.rider.phases[run.phase]?.kind === "await" ? { atWait: true } : {}) };
     ctx.sleep(pollMs);
   }
 }

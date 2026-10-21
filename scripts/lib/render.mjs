@@ -59,7 +59,7 @@ export function render(verb, r) {
     case "operator": return [`run ${r.runId} stopped at operator: ${r.reason}`, `total cost: ${fmtCost(r.totalCost ?? 0)}`, "the operator directs what happens next:", ...operatorMoves(r.overrulable, r.runId, r.targetFlags)].join("\n");
     case "noted": return `noted (${r.notes} notes on ${r.ended ? "ended " : ""}run ${r.runId})`;
     case "event": return r.events.length ? r.events.map(eventLine).join("\n") : `no new event: ${r.reason}`;
-    case "timeout": return `no event in ${r.minutes} min; the phase is still running — re-arm rider await`;
+    case "timeout": return `no event in ${r.minutes} min; ${r.atWait ? "nothing is ready to judge yet" : "the phase is still running"} — re-arm rider await`;
     default: break;
   }
   if (verb === "start" || verb === "next" || verb === "resume" || verb === "overrule") return startNote(verb, r, `${r.phase} started as ${r.model}: ${r.session.shortId}  (${r.attach})${r.resumed ? `  resumed ${r.resumed}` : ""}\nvisit ${r.visit ?? "?"} of run ${r.runId}`);
@@ -91,7 +91,8 @@ function renderNone(r) {
 }
 
 function renderHuman(r) {
-  // Entering the phase does not run its check; only `rider check` does, and only then is there an exit code.
+  // Entering the phase by an edge runs no check: `rider check` runs it, and only then is there an exit code. A start at
+  // the gate carries its pre-flight's, which ran it and saw it fail.
   const ran = r.checkExit != null ? `exit ${r.checkExit}` : "not run yet: rider check runs it";
   const L = [`${whose(r)} · phase ${r.phase} is yours`];
   if (r.branchDrift) L.push(driftLine(r));

@@ -3,9 +3,12 @@ import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { readJson, writeJsonAtomic } from "./store.mjs";
 
-/** Machine facts and overrides (§4.2), one file per rider (`riderPaths(...).local`). Keys not listed here are kept but unused. */
+/** Machine facts and overrides (§4.2), one file per rider (`riderPaths(...).local`). Keys not listed here are kept but unused.
+ *  `awaitCheckFailures` is checked here: a null slips past every default, and a wait would read as failing at once. */
 export function loadLocal(rp) {
-  return { maxWaitHours: 6, pollSeconds: 30, models: {}, advisor: null, launchArgs: [], claudePath: null, shell: null, permissionMode: "auto", staleDecisionMinutes: 20, awaitCheckFailures: 3, ...readJson(rp.local, {}) };
+  const local = { maxWaitHours: 6, pollSeconds: 30, models: {}, advisor: null, launchArgs: [], claudePath: null, shell: null, permissionMode: "auto", staleDecisionMinutes: 20, awaitCheckFailures: 3, ...readJson(rp.local, {}) };
+  if (!Number.isInteger(local.awaitCheckFailures) || local.awaitCheckFailures < 1) throw new Error(`${rp.local}: awaitCheckFailures must be a positive integer (got ${JSON.stringify(local.awaitCheckFailures)})`);
+  return local;
 }
 /** A run id is unique within its instance (§5): one reused would let a stale key `<runId>.<n>` match another run's
  *  stretch. Four hex digits collide often enough over an instance's life, so `taken` (the ids on file) is re-rolled past. */

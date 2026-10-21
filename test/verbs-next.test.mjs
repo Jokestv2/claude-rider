@@ -279,10 +279,10 @@ test("resume runs no requires", (t) => {
 
 test("a requires that hangs is refused, not passed", (t) => {
   // Review Focus 2: a command past its cap is a failure, exit -1, and says so. The cap is lowered for the test only.
-  const { ctx, key, launches } = planDone(t, { riderMd: requiring("build", ["sleep 30"]), local: { requiresTimeoutMs: 300 } });
+  const { ctx, key, launches } = planDone(t, { riderMd: requiring("build", ["sleep 3"]), local: { requiresTimeoutMs: 300 } });
   const before = snapshotOf(ctx);
   const r = next(ctx, "planned", { on: key });
-  assert.deepEqual([r.ok, r.cause, r.error], [false, "requires", "requires check failed for build (exit -1: timed out after 0.3 s): sleep 30"]);
+  assert.deepEqual([r.ok, r.cause, r.error], [false, "requires", "requires check failed for build (exit -1: timed out after 0.3 s): sleep 3"]);
   assert.equal(readFileSync(ctx.paths.state, "utf8"), before.bytes, "no state write");
   assert.equal(ctx.loadRun().visits.build, undefined);
   assert.equal(launches().length, 1);

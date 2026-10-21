@@ -260,7 +260,7 @@ test("await's heartbeat is 360 minutes at an await phase", (t) => {
   start(w.ctx, { phase: "wait" });
   const judge = makeCtx({ root: w.p.root, binding: w.binding, clock: w.clock, watcherAlive: () => 4242 });
   const t0 = w.clock.t;
-  assert.deepEqual(awaitEvent(judge, { pollMs: 600_000 }), { ok: false, state: "timeout", minutes: 360 });
+  assert.deepEqual(awaitEvent(judge, { pollMs: 600_000 }), { ok: false, state: "timeout", minutes: 360, atWait: true });
   assert.equal(w.clock.t - t0, 360 * 60_000);
   assert.equal(awaitEvent(judge, { maxMinutes: 30, pollMs: 600_000 }).minutes, 30, "a given --max-minutes wins");
   // Elsewhere it stays 60.

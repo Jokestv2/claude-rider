@@ -101,7 +101,7 @@ export function start(ctx, { phase = null, dryRun = false, by = "judge" } = {}) 
       if (pre.cause && !dryRun) ctx.event("refused", { phase: pre.target, text: pre.error, by, cause: pre.cause });
       return refuse(pre.error, pre.cause);
     }
-    const { target, baseBranch, entry, note } = pre;
+    const { target, baseBranch, entry, note, gate } = pre;
     const run = newRun({ rider: ctx.rider.name, phase: target, baseBranch, now: ctx.now(), taken: ctx.runIdsInUse(), roll: ctx.rollRunId });
     // How often the operator overrides the located phase is a trajectory signal (§6.2): the record keeps the choice.
     run.entry = entry;
@@ -109,6 +109,8 @@ export function start(ctx, { phase = null, dryRun = false, by = "judge" } = {}) 
     const r = enterPhase(ctx, run, target, { dryRun });
     if (!r.ok) return r;
     if (note) r.note = note;
+    // The pre-flight ran the gate's check and saw it fail: the block reports that run, not "not run yet".
+    if (r.state === "human" && gate) Object.assign(r, { checkExit: gate.status, checkOutput: gate.output });
     // A dry run is the cheap "where would this instance start?": it names the entry, since no run records it.
     if (dryRun) r.entry = entry;
     return r;
@@ -140,7 +142,8 @@ export function enterPhase(ctx, run, phase, { dryRun = false } = {}) {
     run.handoff = hasSessionStretch(run) ? { phase, at, tip: run.workTip ?? ctx.tip("HEAD") } : null;
     ctx.saveRun(run);
     ctx.event("phase-entered", { runId: run.runId, phase, text: `visit ${run.visits[phase]} · human: ${def.check}` });
-    // No `checkExit`: the check has not run yet, and `rider check` is what runs it. `show` runs after the lock (`readouts`).
+    // No `checkExit`: entering runs no check, and `rider check` is what runs it; `start` adds its pre-flight's, which ran
+    // it. `show` runs after the lock (`readouts`).
     // The drift the run last saw, as `check`'s human block prints it: nothing else looks at the tree at a gate.
     return { ok: true, state: "human", rider: run.rider, instance: ctx.instance.id, runId: run.runId, phase, check: def.check, show: null, notes: run.notes, totalCost: totalCost(run), ...driftOf(run), [RUN]: run };
   }

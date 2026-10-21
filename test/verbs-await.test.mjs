@@ -230,5 +230,6 @@ test("a gate reached from a wait alone records no handoff: a wait is no session"
   start(ctx, { phase: "wait" });
   const r = next(ctx, "settled", { on: settle(ctx) });
   assert.deepEqual([r.state, r.phase], ["human", "merge"]);
+  assert.equal(r.checkExit, undefined, "entered by an edge: the gate's check has not run");
   assert.equal(ctx.loadRun().handoff, null);
 });
