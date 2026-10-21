@@ -27,8 +27,8 @@ export function respawnWatcher(ctx, run, sess) {
   return true;
 }
 
-/** One classification pass over the active run (§4.4). Idempotent. The pass holds the lock for ~20 s at most; the
- *  readouts after it add their commands' caps: `show`'s 30 s, 10 s per evidence command, and 10 s per `requires`
+/** One classification pass over the active run (§4.4). Idempotent. The pass holds the lock while it classifies, which at
+ *  a human phase includes the gate check under `sh`'s 30 s cap; the readouts after it add their commands' caps: `show`'s 30 s, 10 s per evidence command, and 10 s per `requires`
  *  command of each edge. The whole pass is one locked write, so a check queued behind another reads the outcome that
  *  one stored (§7.3). The watcher passes `readouts: false`: it acts on the classification and prints neither evidence nor show. */
 export function check(ctx, { readouts: withReadouts = true } = {}) {
