@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-// Live smoke: the real CLI against the real binding, in temp copies of smoke/rider and smoke/instances. usage: npm run smoke
+// Live smoke: the real CLI against the real binding, in temp copies of smoke/rider, smoke/instances and smoke/await. usage: npm run smoke
 import { spawn, spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -11,11 +11,13 @@ import { defaultClaudePath } from "../scripts/bindings/claude-code.mjs";
 const CLAUDE = defaultClaudePath(); // spawnSync("claude") does not resolve the .cmd shim on Windows
 const HERE = fileURLToPath(new URL(".", import.meta.url));
 const RIDER = join(HERE, "..", "scripts", "rider.mjs");
-// Two projects: the first holds one rider, so its commands need no --rider; the second holds the instance rider.
+// Three projects: the first holds one rider, so its commands need no --rider; the second holds the instance rider; the
+// third holds the await rider, alone too.
 const root = mkdtempSync(join(tmpdir(), "rider-smoke-"));
 mkdirSync(join(root, "riders"));
 cpSync(join(HERE, "rider"), join(root, "riders", "smoke"), { recursive: true });
 const root2 = mkdtempSync(join(tmpdir(), "rider-smoke-pair-"));
+const root3 = mkdtempSync(join(tmpdir(), "rider-smoke-await-"));
 const INSTANCES = ["a", "b"];
 let fails = 0;
 const check = (name, ok, detail) => { console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail !== undefined ? `  (${detail})` : ""}`); if (!ok) fails++; };
@@ -31,6 +33,7 @@ const cli = (cwd) => (...args) => {
 };
 const rider = cli(root);
 const pair = cli(root2);
+const waits = cli(root3);
 // bounded by iterations, not wall time: each pass is a 5 s sleep plus one `check`, which may itself settle for ~10 s
 const until = (pred, seconds) => { for (let i = 0; i < seconds; i += 5) { const r = rider("check"); if (pred(r)) return r; sleepSync(5000); } return rider("check"); };
 const waitFor = (pred, seconds) => { for (let i = 0; i < seconds && !pred(); i += 5) sleepSync(5000); return pred(); };
@@ -132,13 +135,49 @@ try {
   check("the two-instance section ran to the end", false, e.stack ?? e.message);
 }
 
-// A section that threw while `rider await` was armed leaves it blocking for its five minutes; it decides nothing.
-if (awaiting && awaiting.exitCode === null && awaiting.signalCode === null) awaiting.kill();
+// 8. an await phase: the run starts at the wait, so no session is launched; the watcher polls its check every 2 s, and
+//    this script plays the job it waits on by creating ready.flag once the watcher has polled twice. Its own try.
+let awaitingReady;
+try {
+  mkdirSync(join(root3, "riders"));
+  cpSync(join(HERE, "await"), join(root3, "riders", "await"), { recursive: true });
+  const w = waits("start", "wait");
+  check("start entered the await phase and launched no session", w.state === "awaiting" && w.phase === "wait" && !w.session, JSON.stringify(w).slice(0, 200));
+  const key = keyFrom(w);
+  const early = waits("next", "settled", "--on", key, "--because", "smoke");
+  check("next settled is refused before the flip", early.ok === false && /is awaiting its check/.test(early.error ?? ""), early.error ?? JSON.stringify(early).slice(0, 200));
+  // Armed before the flip, so the ready event lands after its baseline. Its close is listened for at once: the sleeps
+  // below block the event loop, and a close that fires meanwhile is delivered after them.
+  awaitingReady = spawn(process.execPath, [RIDER, "await", "--max-minutes", "2", "--json"], { cwd: root3, stdio: ["ignore", "pipe", "pipe"] });
+  let readyOut = "";
+  awaitingReady.stdout.on("data", (d) => { readyOut += d; });
+  const readyClosed = new Promise((res) => awaitingReady.on("close", res)); // close, not exit: stdout is drained
+  // A poll appends no event: its state.json rewrite is how a reader sees the watcher is polling (§7.6).
+  const polls = () => { try { return JSON.parse(readFileSync(instanceFile(root3, "await", "default", "state.json"), "utf8")).run?.sessions?.at(-1)?.polls ?? 0; } catch { return 0; } };
+  for (let i = 0; i < 120 && polls() < 2; i++) sleepSync(500);
+  const before = polls();
+  check("the watcher polled at least twice before the flip", before >= 2, `${before} polls`);
+  writeFileSync(join(root3, "ready.flag"), "");
+  let timer;
+  const readyCode = await Promise.race([readyClosed, new Promise((res) => { timer = setTimeout(() => res("timeout"), 150_000); })]);
+  clearTimeout(timer);
+  if (readyCode === "timeout") awaitingReady.kill();
+  let readied = null;
+  try { readied = JSON.parse(readyOut); } catch { /* reported below */ }
+  check("rider await, armed before the flip, exited 0 with the ready event", readyCode === 0 && !!readied?.events?.some((e) => e.kind === "ready" && e.key === key), `${readyCode}: ${readyOut.replace(/\s+/g, " ").trim().slice(0, 160)}`);
+  const end = waits("next", "settled", "--on", key, "--because", "smoke: ready.flag exists");
+  check("next settled --on <key> ended the run", end.ok !== false && end.state === "operator", end.state ?? end.error ?? JSON.stringify(end).slice(0, 200));
+} catch (e) {
+  check("the await section ran to the end", false, e.stack ?? e.message);
+}
+
+// A section that threw while `rider await` was armed leaves it blocking until its deadline; it decides nothing.
+for (const child of [awaiting, awaitingReady]) if (child && child.exitCode === null && child.signalCode === null) child.kill();
 // Stop, then remove: `claude rm`'s help promises only that it also works on exited sessions, and a section that failed
 // midway may have left one running.
 for (const id of launched) for (const verb of ["stop", "rm"]) spawnSync(CLAUDE, [verb, id], { stdio: "ignore", timeout: 60_000 });
 // a watcher may still be polling from inside its root; give the watchers one tick to exit before their cwd is removed
-const pids = [paths.pid, ...INSTANCES.map((id) => instanceFile(root2, "pair", id, "watch.pid"))];
+const pids = [paths.pid, ...INSTANCES.map((id) => instanceFile(root2, "pair", id, "watch.pid")), instanceFile(root3, "await", "default", "watch.pid")];
 for (let i = 0; i < 7 && !pids.every(pidDead); i++) sleepSync(5000);
 // One still alive is in a wait (a rate-limit reset, a session the stop above left listed): at the reset it would resume a
 // session this cleanup stopped, and pay with nothing tracking it. SIGTERM, then SIGKILL after a short grace.
@@ -153,6 +192,6 @@ for (const file of pids) {
   if (isAlive(pid)) { signal = "SIGKILL"; try { process.kill(pid, signal); } catch { /* exited meanwhile */ } }
   console.log(`killed watcher pid ${pid} (${signal}), still alive after the wait: ${file}`);
 }
-console.log(fails ? `smoke: ${fails} FAILED  (state kept at ${root} and ${root2})` : "smoke: PASS");
-if (!fails) for (const dir of [root, root2]) { try { rmSync(dir, { recursive: true, force: true }); } catch (e) { console.log(`(could not remove ${dir}: ${e.message})`); } }
+console.log(fails ? `smoke: ${fails} FAILED  (state kept at ${root}, ${root2} and ${root3})` : "smoke: PASS");
+if (!fails) for (const dir of [root, root2, root3]) { try { rmSync(dir, { recursive: true, force: true }); } catch (e) { console.log(`(could not remove ${dir}: ${e.message})`); } }
 process.exit(fails ? 1 : 0);

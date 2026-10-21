@@ -1,13 +1,13 @@
 // test/loopsim.test.mjs
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { writeFileSync } from "node:fs";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { check } from "../scripts/lib/check.mjs";
 import { next, start, status } from "../scripts/lib/verbs.mjs";
 import { watchLoop } from "../scripts/lib/watch.mjs";
 import { FakeBinding } from "./fake-binding.mjs";
-import { FakeClock, makeCtx, tmpProject, wake } from "./helpers.mjs";
+import { AWAIT_PROMPTS, AWAIT_RIDER_MD, FakeClock, makeCtx, requiring, tmpProject, wake } from "./helpers.mjs";
 
 const G = (s, { turns = 30, cost = 5 } = {}) => ({ statuses: ["running", "done"], read: { lastText: `STATUS: ${s}\n<promise>MILESTONE</promise>`, cost, turns } });
 const BLOCKED = { statuses: ["done"], read: { lastText: "STATUS: BLOCKED - design change needed: X\n<promise>MILESTONE</promise>", cost: 2 } };
@@ -115,4 +115,82 @@ test("a rate limit that keeps returning is bounded: three resumes, then one rate
   assert.match(ev[0].text, /resumed after a rate limit 3 times/);
   assert.equal(status(t.ctx).state, "finished"); // the session stopped; the run stays active for the operator's next move
   t.p.cleanup();
+});
+
+test("requires, locate and an await phase compose over three laps", (t) => {
+  // The await fixture as a loop (§10): `locate` reads where the project's files say a fresh run enters, review needs a
+  // budget, the wait may hand the run straight to the gate, and the visit cap is declared as 4, above the wait's three entries.
+  const edit = (md, from, to) => { const out = md.replace(from, to); assert.notEqual(out, md, `fixture edit missed: ${from}`); return out; };
+  let md = requiring("review", ["test -f budget.ok"], AWAIT_RIDER_MD);
+  md = edit(md, "start: plan\n", "start: plan\nlocate: cat where.txt\n");
+  md = edit(md, "timed out: operator }", "timed out: operator, check in: merge }");
+  md = edit(md, "\nintake:\n", "\nlimits: { visits: 4 }\nintake:\n");
+  const p = tmpProject({ riderMd: md, prompts: AWAIT_PROMPTS });
+  t.after(p.cleanup);
+  const file = (name) => join(p.root, name);
+  // The jobs a wait waits on settle while the watcher sleeps: `flipIn` counts the sleeps left before ready.flag appears.
+  // makeCtx takes the clock's sleep as it is, so the hook goes in first.
+  const clock = new FakeClock();
+  const tick = clock.sleep;
+  let flipIn = 0;
+  clock.sleep = (ms) => { tick(ms); if (flipIn && --flipIn === 0) writeFileSync(file("ready.flag"), ""); };
+  const binding = new FakeBinding({ script: [G("planned"), G("more"), G("more"), G("done")] });
+  const ctx = makeCtx({ root: p.root, binding, clock });
+  assert.deepEqual([ctx.rider.locate, ctx.rider.phases.review.requires, ctx.rider.phases.wait.edges["check in"], ctx.rider.limits.visits], ["cat where.txt", ["test -f budget.ok"], "merge", 4]);
+  writeFileSync(file("where.txt"), "plan\n");
+  writeFileSync(file("budget.ok"), "");
+  /** One wait watched to ready: two polls answer 75, the flag appears in the second sleep, the third poll passes. The
+   *  flag is consumed, so the next lap's wait polls again. Returns the wait's key. */
+  const waitReady = () => {
+    flipIn = 2;
+    assert.equal(w(ctx).state, "ready");
+    rmSync(file("ready.flag"));
+    const wait = ctx.loadRun().sessions.at(-1);
+    assert.deepEqual([wait.kind, wait.outcome, wait.polls, wait.lastExit], ["await", "ready", 3, 0]);
+    return status(ctx).key;
+  };
+
+  const s = start(ctx);
+  assert.deepEqual([s.state, s.phase], ["running", "plan"]);
+  assert.deepEqual(ctx.loadRun().entry, { by: "locate", located: "plan", phase: "plan" });
+  assert.equal(w(ctx).state, "done");
+  assert.equal(next(ctx, "planned", { on: status(ctx).key, because: "plan committed" }).state, "awaiting");
+  for (let lap = 1; lap <= 2; lap++) {
+    assert.equal(next(ctx, "settled", { on: waitReady(), because: "the jobs settled" }).phase, "review");
+    assert.equal(w(ctx).state, "done");
+    assert.equal(next(ctx, "more", { on: status(ctx).key, because: "a job needs rerunning" }).state, "awaiting");
+  }
+  // Lap three: the budget is spent by the time the jobs settle. The pre-flight refuses the review, the run stays where
+  // it was, and the same key takes the other way out of the wait.
+  const key = waitReady();
+  rmSync(file("budget.ok"));
+  const bytes = readFileSync(ctx.paths.state, "utf8");
+  const refused = next(ctx, "settled", { on: key, because: "the jobs settled" });
+  assert.deepEqual([refused.ok, refused.cause, refused.error], [false, "requires", "requires check failed for review (exit 1): test -f budget.ok"]);
+  assert.equal(readFileSync(ctx.paths.state, "utf8"), bytes, "a refusal changes nothing");
+  const runId = ctx.loadRun().runId;
+  assert.deepEqual(ctx.readEvents().filter((e) => e.kind === "refused").map((e) => [e.cause, e.runId, e.phase, e.key, e.by]), [["requires", runId, "wait", `${runId}.6`, "judge"]]);
+  assert.equal(key, `${runId}.6`);
+  const gate = next(ctx, "check in", { on: key, because: "no budget left for another review" });
+  assert.deepEqual([gate.state, gate.phase], ["human", "merge"]);
+  writeFileSync(file("merged.flag"), "");
+  assert.equal(check(ctx).state, "none");
+  const first = ctx.lastEndedRun();
+  assert.equal(first.endedBy, "done");
+  assert.deepEqual(first.transitions.map((x) => `${x.from}:${x.label}>${x.to}`), ["plan:planned>wait", "wait:settled>review", "review:more>wait", "wait:settled>review", "review:more>wait", "wait:check in>merge"]);
+  assert.deepEqual(first.visits, { plan: 1, wait: 3, review: 2, merge: 1 });
+  // The one watcher spans both kinds: it woke the judge once per stretch, on done at a session and on ready at the wait.
+  assert.deepEqual(wake(ctx).map((e) => [e.kind, e.phase]), [["done", "plan"], ["ready", "wait"], ["done", "review"], ["ready", "wait"], ["done", "review"], ["ready", "wait"]]);
+
+  // The project's files now say the next run reviews. A located phase keeps its door: until the budget is back, review's
+  // requires refuses the start and no run is made.
+  writeFileSync(file("where.txt"), "review\n");
+  const blocked = start(ctx);
+  assert.deepEqual([blocked.ok, blocked.cause], [false, "requires"]);
+  assert.equal(ctx.loadRun(), null);
+  writeFileSync(file("budget.ok"), "");
+  const second = start(ctx);
+  assert.deepEqual([second.state, second.phase], ["running", "review"]);
+  assert.deepEqual(ctx.loadRun().entry, { by: "locate", located: "review", phase: "review" });
+  assert.equal(binding.calls.filter((c) => c.call === "launch").length, 4);
 });
