@@ -501,7 +501,10 @@ balance); flow sequences `[ a, b ]`; scalars bare-to-end-of-line, `"double"` (`\
 `'single'` (`''`); `true`/`false`/`null`/numbers typed; `#` lines are comments, no inline comments.
 Nothing else. A ` #` inside a value is part of the value, since shell lines contain one, so a trailing
 comment would become part of the command; no example here carries one. In a flow list `[ a, b ]`
-a comma outside quotes ends an item, so a command that contains one goes in a block list.
+a comma, a `]` or a `}` outside quotes ends an item, and in a flow map they end a value. So a
+command that contains one, such as `test -f ${RIDER_SCOPE}/approved`, is quoted
+(`[ "test -f ${RIDER_SCOPE}/approved" ]`) or goes in a block list; unquoted, the reader refuses it
+and names the line.
 
 ## Verbs
 

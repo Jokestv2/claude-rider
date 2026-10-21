@@ -105,8 +105,7 @@ function flowMap(s, i, lineNo) {
       i = end;
     }
     out[key] = v;
-    i = skipWs(s, i);
-    if (s[i] === ",") i++;
+    i = afterItem(s, i, "}", lineNo, "in a flow map", "quote the value or use a block map");
   }
 }
 
@@ -119,9 +118,17 @@ function flowSeq(s, i, lineNo) {
     if (i >= s.length) throw new Error(`yaml: unterminated [ at line ${lineNo}`);
     const end = flowScalarEnd(s, i);
     out.push(scalar(s.slice(i, end).trim(), lineNo));
-    i = skipWs(s, end);
-    if (s[i] === ",") i++;
+    i = afterItem(s, end, "]", lineNo, "in a flow list", "quote the item or use a block list");
   }
+}
+
+/** Where the next item starts: an item ends at a comma or at its collection's closer, which the caller reads. Any other
+ *  stop is the other bracket inside an unquoted item, such as the `}` of `${X}`; passing over it would never advance. */
+function afterItem(s, i, closer, lineNo, where, fix) {
+  i = skipWs(s, i);
+  if (i >= s.length || s[i] === closer) return i;
+  if (s[i] === ",") return i + 1;
+  throw new Error(`yaml: unexpected "${s[i]}" ${where} at line ${lineNo} — ${fix}`);
 }
 
 function skipWs(s, i) {
