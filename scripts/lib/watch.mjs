@@ -66,7 +66,15 @@ export function watchLoop(ctx, { maxWaitHours = 6, pollMs = 30_000, maxResumes =
       // A tick whose run moved on is left to finish, and its poll is not committed (§7.3.1): watch what the run now runs.
       if (polled.moved) { log(MOVED_ON_WATCHING); continue; }
       if (polled.outcome === "ready" || polled.outcome === "timed-out") { log(`${polled.outcome}: ${polled.key}`); return { ok: true, state: polled.outcome, key: polled.key, phase: polled.phase }; }
-      ctx.sleep(ctx.rider.phases[polled.phase].pollSeconds * 1000);
+      // The phase's interval, in slices of pollMs, as the rate-limit wait below: a decision during it launches its
+      // stretch while this watcher is alive, so none is spawned for it, and a slice sees the key move (§7.3.2, §7.5).
+      const until = ctx.now().getTime() + ctx.rider.phases[polled.phase].pollSeconds * 1000;
+      let moved = false;
+      while (!moved && ctx.now().getTime() < until) {
+        ctx.sleep(Math.min(pollMs, until - ctx.now().getTime()));
+        moved = currentKey(ctx.loadRun()) !== polled.key;
+      }
+      if (moved) log(MOVED_ON_WATCHING);
       continue;
     }
     // A decision entered a wait between the stored read and `check`, which reports a wait and never polls it: go round.

@@ -819,12 +819,13 @@ nothing re-invokes it. The watcher still records `ready` or `timed-out`, and aft
 `staleDecisionMinutes` `rider board` lists the instance as **undecided**, so board mode or a fresh
 `/rider:rider <id>` decides it. A headless judge is not built.
 
-**Known limit:** a watcher at an await phase is busy. While a tick runs, and while it sleeps the
-phase's `pollSeconds` between polls, the instance's one watcher does nothing else, and a verb that
-finds it alive spawns no other. A session launched meanwhile — the operator ended the wait, and a
-fresh `rider start` launched one — is first polled once the tick ends or the sleep runs out: up to
-`checkTimeoutSeconds` or `pollSeconds` later. The board shows it *running* meanwhile, which it is;
-only the watcher's notice of its stop is late.
+**Known limit:** a watcher at an await phase is busy. While a tick runs, the instance's one watcher
+does nothing else, and a verb that finds it alive spawns no other. A session launched meanwhile —
+the operator ended the wait, and a fresh `rider start` launched one — is first polled once the tick
+ends: up to `checkTimeoutSeconds` later. Between ticks the watcher sleeps the phase's `pollSeconds`
+in slices of `local.json`'s `pollSeconds` (30 s by default) and reads the run after each, so a
+stretch launched while it sleeps is polled within one slice. The board shows it *running*
+meanwhile, which it is; only the watcher's notice of its stop is late.
 
 **Known limit:** a reboot kills the check runner and its process group together, so nothing
 overlaps; a tick it cut short is the rider's to make idempotent. After a reboot, nothing runs a verb

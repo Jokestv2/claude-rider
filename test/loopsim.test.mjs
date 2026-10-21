@@ -139,10 +139,11 @@ test("requires, locate and an await phase compose over three laps", (t) => {
   assert.deepEqual([ctx.rider.locate, ctx.rider.phases.review.requires, ctx.rider.phases.wait.edges["check in"], ctx.rider.limits.visits], ["cat where.txt", ["test -f budget.ok"], "merge", 4]);
   writeFileSync(file("where.txt"), "plan\n");
   writeFileSync(file("budget.ok"), "");
-  /** One wait watched to ready: two polls answer 75, the flag appears in the second sleep, the third poll passes. The
-   *  flag is consumed, so the next lap's wait polls again. Returns the wait's key. */
+  /** One wait watched to ready: two polls answer 75, the flag appears in the second wait's last sleep, the third poll
+   *  passes. Each 60 s wait sleeps in two 30 s slices of pollMs, so that is the fourth sleep. The flag is consumed, so
+   *  the next lap's wait polls again. Returns the wait's key. */
   const waitReady = () => {
-    flipIn = 2;
+    flipIn = 4;
     assert.equal(w(ctx).state, "ready");
     rmSync(file("ready.flag"));
     const wait = ctx.loadRun().sessions.at(-1);

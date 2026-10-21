@@ -45,12 +45,14 @@ const waitOf = (ctx) => ctx.loadRun().sessions.find((s) => s.kind === "await");
 const at = (min) => new Date(Date.parse("2026-09-03T12:00:00Z") + min * 60_000).toISOString();
 
 test("awaiting → ready after N polls at the phase's interval", (t) => {
-  const w = project(t, { answers: [75, 75, { status: 0, output: "\n  3/3 jobs settled  \n2 succeeded, 1 failed" }] });
+  const polledAt = [];
+  const w = project(t, { answers: [75, 75, { status: 0, output: "\n  3/3 jobs settled  \n2 succeeded, 1 failed" }], during: () => polledAt.push(w.clock.now().toISOString()) });
   const { runId, key } = start(w.ctx, { phase: "wait" });
   const version = w.ctx.readState().version;
   const r = watchLoop(w.ctx, w.opts);
   assert.deepEqual(r, { ok: true, state: "ready", key, phase: "wait" });
-  assert.deepEqual(w.clock.slept, [60_000, 60_000], "the phase's pollSeconds, not local.json's");
+  assert.deepEqual(polledAt, [at(0), at(1), at(2)], "the phase's pollSeconds, not local.json's");
+  assert.deepEqual(w.clock.slept, Array(4).fill(30_000), "slept in local.json's pollMs slices, so a decision meanwhile is seen within one");
   assert.deepEqual(w.runCheck.calls, Array(3).fill({ cmd: CHECK, timeoutMs: 300_000, key, phase: "wait" }));
   assert.deepEqual(wake(w.ctx).map((e) => [e.kind, e.runId, e.phase, e.key, e.text]), [["ready", runId, "wait", key, "3/3 jobs settled"]]);
   // A poll appends no event (§7.6): its state.json rewrite is how a reader sees the watcher is still polling.
@@ -76,7 +78,7 @@ test("timed-out at the deadline", (t) => {
   // Polls at 12:00, 12:01, … 14:00: the poll that reaches the deadline is the one that times the wait out.
   const wait = waitOf(w.ctx);
   assert.deepEqual([wait.outcome, wait.polls, wait.lastExit, wait.timedOutAt, wait.readyAt], ["timed-out", 121, 75, "2026-09-03T14:00:00.000Z", null]);
-  assert.equal(w.clock.slept.length, 120);
+  assert.equal(w.clock.slept.length, 240, "120 waits of 60 s, each in two 30 s slices");
   assert.deepEqual(wake(w.ctx).map((e) => [e.kind, e.key, e.text]), [["timed-out", key, "deadline 2026-09-03T14:00:00.000Z passed; last exit 75"]]);
 });
 
@@ -107,7 +109,7 @@ test("three errors in a row wake the judge once, a 75 ends the streak, and a lat
     [0, null, false], [1, at(0), false], [2, at(0), false], [3, at(0), true], [4, at(0), true],
     [0, null, false], [1, at(5), false], [2, at(5), false], [3, at(5), true],
   ]);
-  assert.deepEqual(w.clock.slept, Array(8).fill(60_000), "a failing check keeps polling at the phase's interval");
+  assert.deepEqual(w.clock.slept, Array(16).fill(30_000), "a failing check keeps polling at the phase's interval (the events' times), in pollMs slices");
   // A 0 ends the streak as a 75 does (§7.2): a wait that passed is never reported as failing.
   const wait = waitOf(w.ctx);
   assert.deepEqual([wait.outcome, wait.failures, wait.failingSince, wait.failingEmitted], ["ready", 0, null, false]);
@@ -184,6 +186,32 @@ test("a run that moved on during a check gets no poll committed, and the watcher
   // One watcher spans both kinds, each at its own interval: plan's polls are local.json's pollMs.
   assert.equal(w.clock.slept.includes(60_000), false, `slept ${w.clock.slept.join(", ")}`);
   assert.equal(w.clock.slept[0], 30_000);
+});
+
+test("a stretch launched during the wait's sleep is watched within one pollMs slice, not after pollSeconds", (t) => {
+  // The operator ends an hourly wait and starts plan while the watcher sleeps: `start` finds this watcher alive and
+  // spawns none, so this one has to notice the move (§7.3.2, §7.5).
+  let judge = null;
+  let started = null;
+  const w = project(t, { md: AWAIT_RIDER_MD.replace("pollSeconds: 60", "pollSeconds: 3600"), answers: [75], script: [{ statuses: ["running", "done"], read: { lastText: "STATUS: planned" } }] });
+  judge = makeCtx({ root: w.p.root, binding: w.binding, clock: w.clock });
+  start(w.ctx, { phase: "wait" });
+  const sleep = w.ctx.sleep;
+  w.ctx.sleep = (ms) => {
+    sleep(ms);
+    if (started) return;
+    assert.equal(next(judge, "operator", { on: currentKey(judge.loadRun()), by: "operator", because: "the jobs were cancelled by hand" }).state, "operator");
+    started = start(judge);
+  };
+  const r = watchLoop(w.ctx, w.opts);
+  assert.deepEqual([r?.state, r?.phase, r?.key], ["done", "plan", `${started.runId}.1`]);
+  assert.deepEqual(w.clock.slept.slice(0, 2), [30_000, 30_000], "one slice of the wait's sleep, then plan's one poll");
+  assert.ok(w.clock.slept.every((ms) => ms <= 30_000), `slept ${w.clock.slept.join(", ")}`);
+  const events = wake(w.ctx);
+  assert.deepEqual(events.map((e) => [e.kind, e.key]), [["done", `${started.runId}.1`]]);
+  assert.ok(events[0].at < at(2), `plan's stop is seen at ${events[0].at}, not an hour on`);
+  assert.ok(w.logs.includes("the run moved on; watching its current stretch"), w.logs.join("\n"));
+  assert.equal(w.runCheck.calls.length, 1, "the wait polled no more");
 });
 
 test("branch drift during a wait is recorded", (t) => {
