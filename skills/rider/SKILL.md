@@ -165,9 +165,10 @@ last transition (who made it and why). The refusal is recorded on the instance's
 - **Never retry with a fresh key.** Your label judged a stretch that is no longer the current one;
   sending it again under the new key would apply it to a stretch you have not read.
 - **Re-orient from `rider status`**, and judge again only if the new state calls for a judgment —
-  then from a fresh `rider check` and its own `decide with:` line, as in step 2.
+  then from a fresh `rider check` and its own `decide with:` line, copied as in step 2, without
+  its `(labels: …)` tail.
 - A refusal for a *missing* or *malformed* `--on` is a usage error, not news: copy the
-  `decide with:` line instead of composing the command.
+  `decide with:` line, without its `(labels: …)` tail, instead of composing the command.
 
 **A `requires` refusal is not a stale key.** It reads
 `refused: requires check failed for <phase> (exit <n>): <command>`, then the command's output, and
@@ -222,9 +223,10 @@ opened when they want it.
     `rider next operator --instance <id> --on <key> --by operator --because "…"`.
   - When they ask you to judge a stretch yourself (an undecided one, say), run `rider check
     --instance <id>`, read the block as any judge would (*Reading a finished phase*), and copy its
-    `decide with:` line; `--by judge` is the default. Judge from the block, never from a board row:
-    the board runs no command, so its `decide with:` line never marks a label `✗`. Only `check`
-    runs the targets' `requires` and shows which labels `next` would refuse.
+    `decide with:` line without its `(labels: …)` tail; `--by judge` is the default. Judge from the
+    block, never from a board row: the board runs no command, so its `decide with:` line never
+    marks a label `✗`. Only `check` runs the targets' `requires` and shows which labels `next`
+    would refuse.
   - A **needs its judge** row has a judge that is most likely about to decide: leave it to that
     judge unless the operator says otherwise.
   - An **orphaned** row's state has no directory any more: only `status` and `reset` accept its id,

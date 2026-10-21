@@ -313,9 +313,13 @@ state: ready
 decide with:  rider next <label> --on 9f45.1 --because "…"     (labels: settled · jobs failed ✗ · timed out · operator)
 ```
 
-`next` decides against that stored poll and never runs the check again. After a reboot, or a
-`reset` during a long wait, `rider start await-jobs`, or a `locate` that prints it, goes straight
-back to the wait.
+`next` decides against that stored poll and never runs the check again.
+
+A wait survives a reboot. The run stays active in `state.json`, so `rider start` refuses it
+(`refused: run 95e5 is active at phase await-jobs — rider check, next, or reset first`); instead,
+`rider check` or `rider await` finds the watcher dead, respawns it, and the wait carries on where
+its polls left off. After a `reset` during a long wait, `rider start await-jobs`, or a `locate`
+that prints it, goes straight back to the wait, as a new one.
 
 ### Instances
 
