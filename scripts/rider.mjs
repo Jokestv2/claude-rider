@@ -16,9 +16,11 @@ import { writeWatchPid } from "./lib/watcher-spawn.mjs";
 
 const USAGE = `rider — drive riders/<name>/RIDER.md one phase at a time (run from the project root)
 
-  rider start [phase]                 fresh run: intake, then launch the start phase (or the named one)
+  rider start [phase]                 fresh run at any declared phase: the named one, else the one locate prints
+                                      (start: when the rider declares no locate); intake and that phase's requires
+                                      run first, and a gate's check must fail
   rider next <label> --because "…" --on <key>   take an edge of the current phase; also: resume · operator
-  rider check                         classify the current session; print the block the judge reads, and its decide-with line
+  rider check                         classify the current stretch; print the block the judge reads, and its decide-with line
   rider resume --on <key>             re-enter the current session after a rate limit or a kill
   rider overrule <label> --because "…" --on <runId>   the operator's ruling: revive the run that stopped at operator, take the edge
   rider await [--max-minutes N]       block until the watcher's next event (exit 0) or N min (exit 3)
@@ -33,8 +35,10 @@ const USAGE = `rider — drive riders/<name>/RIDER.md one phase at a time (run f
                    an orphaned id (state, but no directory) is accepted by status and reset only
   --on <key>       what the decision judged: <runId>.<n> for next and resume (check prints it), <runId> for overrule and reset;
                    refused when the instance has moved on since
-  --by judge|operator  who decided, recorded on the transition (default judge; operator for the operator's own ruling)
-  --dry-run        start/next/resume/overrule print the harness command and run nothing
+  --by judge|operator  who decided, recorded on the transition, and on the refused event when it is refused
+                   (default judge; operator for the operator's own ruling)
+  --dry-run        start/next/resume/overrule print what they would enter (the harness command, a gate's or a wait's check);
+                   they launch and record nothing, but start/next/overrule still run the entry checks that could refuse
   --max-minutes N  await's deadline in minutes (default 360 at an await phase, else 60)
   --binding <path>  another harness module (or RIDER_BINDING)
 exit: 0 ok · 2 refused or usage · 3 await timed out`;
