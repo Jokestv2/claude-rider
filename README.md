@@ -255,8 +255,10 @@ killed, then reports whether everything is settled. The executor treats it as op
   next poll runs it again from the top.
 - **Two never run at once** for one instance. The check runs through a small runner, in its own
   process group, with its output going to a file. A watcher respawned while a tick still runs
-  waits for it to end. A tick whose run moved on, because the operator ended the wait, is left to
-  finish, and its poll is not committed.
+  waits for it to end. It kills the tick only when its runner has died and the tick has overrun
+  its own timeout, and it signals nothing once that timeout is a minute past: by then the group's
+  id may name another process's. A tick whose run moved on, because the operator ended the wait,
+  is left to finish, and its poll is not committed.
 - **The check is finished when its shell exits.** A child the tick leaves running neither blocks
   the poll nor turns it into an error. But a timeout (`checkTimeoutSeconds`) and a `reset` kill the
   check's **whole process group**, so a process meant to outlive the tick must leave the group:
@@ -687,8 +689,8 @@ State lives under `.rider/<name>/` at the project root, one directory per instan
     logs/watch.log  the detached watcher's own output
     logs/check.out  the output of the await check now running, while it runs
     watch.pid       the live watcher, if any
-    check.pid       the await check now running, if any: its process group, its wait's key and
-                    when it started
+    check.pid       the await check now running, if any: its process group, its wait's key,
+                    when it started, its runner's pid and the timeout the runner enforces
     lock            present only while a verb holds the instance
 ```
 

@@ -40,10 +40,11 @@ export function ensureWatcher(paths, { riderName, instance, root, script = RIDER
 }
 
 /** The watcher first, so it starts no further check; then the group of a check it left running, which the watcher's
- *  death does not end (§7.3.1). A reset then cannot overlap a tick from the run it forgets. */
-export function killWatcher(paths, alive = isAlive) {
+ *  death does not end (§7.3.1). A reset then cannot overlap a tick from the run it forgets. Neither kill throws on a
+ *  signal, so a reset always ends its run. `checkOpts` reaches `killCheckGroup`: the tests' signaller and sleep. */
+export function killWatcher(paths, alive = isAlive, checkOpts = {}) {
   const pid = watcherAlive(paths, alive);
   if (pid) { try { process.kill(pid); } catch { /* already gone */ } }
   rmSync(paths.watchPid, { force: true });
-  killCheckGroup(paths);
+  killCheckGroup(paths, checkOpts);
 }
