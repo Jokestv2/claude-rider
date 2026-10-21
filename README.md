@@ -74,7 +74,7 @@ riders/lemmaria/
 | `locate` | no | One shell command that prints the phase a fresh run enters (see *Where a fresh run starts: `locate`*) |
 | `phases` | yes | Map of phase name → phase (below) |
 | `instances` | no | One directory glob, such as `nodes/*`: every directory it matches is an instance of this rider (see *Instances*). Without it the rider has one instance, `default` |
-| `intake` | no | List of shell commands; **all must exit 0** before a fresh run may start, whatever phase it starts at. With each phase's `requires`, one of the two mechanical refusals that fire before any model runs |
+| `intake` | no | List of shell commands; **all must exit 0** before a fresh run may start, whatever phase it starts at. One of the mechanical refusals that fire before any model runs, with a `locate` that fails or names no phase, each phase's `requires`, and a gate whose check already passes |
 | `evidence` | no | List of shell commands whose output rides along with every `check` return. Informs the judge; never refuses anything |
 | `limits.visits` | no | Maximum times a run may enter the same phase (default 3). Exceeding it stops the run at `operator`. Rate-limit resumes are counted separately |
 
@@ -276,9 +276,9 @@ reaches `awaitCheckFailures`, a `check failing:` line:
 
 ```
 rider batch/default/db7b · phase await-jobs (visit 1) · stretch db7b.1 · branch main · started 2026-10-20T23:57:50.306Z
-state: awaiting   watcher: alive (pid 111063)   last event: 2026-10-20T23:57:52.442Z check-failing batch/default/db7b await-jobs db7b.1 exit 2, 3 in a row: tool: cannot reach the job queue
+state: awaiting   watcher: alive (pid 111063)   last event: 2026-10-21T00:07:50.519Z check-failing batch/default/db7b await-jobs db7b.1 exit 2, 3 in a row: tool: cannot reach the job queue
   await-jobs await   -         awaiting
-wait: $ tool jobs tick --current · 6 polls · last exit 2 at 2026-10-20T23:57:55.542Z · deadline 2026-10-23T23:57:50.307Z
+wait: $ tool jobs tick --current · 6 polls · last exit 2 at 2026-10-21T00:22:50.731Z · deadline 2026-10-23T23:57:50.307Z
 check failing: 6 in a row since 2026-10-20T23:57:50.377Z
 total cost: $0.00
 next: relay the failing check to the operator, then arm rider await
@@ -384,10 +384,11 @@ different command.
     check: git merge-base --is-ancestor "$RIDER_WORK_BRANCH" main
 ```
 
-**A gate that `locate` may name must not key its check on `RIDER_WORK_BRANCH` or
-`RIDER_WORK_TIP`.** A run that starts at the gate has had no session, so it never learns a work
-branch or tip: both stay empty for its check, which then never passes, and the run waits at the
-gate until it is reset (see *Known limit* below).
+**A gate a fresh run can reach with no session behind it must not key its check on
+`RIDER_WORK_BRANCH` or `RIDER_WORK_TIP`.** That is a gate `locate` may name, a gate the operator
+may enter with `rider start <gate>`, and a gate one edge after a wait that a fresh run may enter. Such
+a run has had no session, so it never learns a work branch or tip: both stay empty for its check,
+which then never passes, and the run waits at the gate until it is reset (see *Known limit* below).
 
 **For a rider with `instances`, `RIDER_WORK_BRANCH` and `RIDER_WORK_TIP` are always empty.** Its
 instances share one working tree on one branch, so the branch checked out is the tree's, not any
@@ -809,9 +810,10 @@ contend on `.git/index.lock`; staging explicit paths and retrying is the adopter
 
 **Known limit:** a run that reaches a gate with no session behind it — started at the gate, or at a
 wait whose edge leads straight there — never learns a work branch or tip, so `RIDER_WORK_BRANCH`
-and `RIDER_WORK_TIP` stay empty for its check. A gate that `locate` may name must not key its check
-on them: a run started there could never pass its gate, and would wait at *needs you* until it is
-reset. Key such a gate on the project's own state instead, as a rider with instances does
+and `RIDER_WORK_TIP` stay empty for its check. A gate a fresh run can reach with no session behind
+it — one `locate` may name or `rider start <gate>` may enter, or one an edge after a wait a fresh run
+may enter — must not key its check on them: such a run could never pass its gate, and would wait at
+*needs you* until it is reset. Key such a gate on the project's own state instead, as a rider with instances does
 (`test -f "$RIDER_SCOPE/REVIEWED"`).
 
 **Known limit:** the judge is a live interactive session. Across a multi-day wait it may die, and

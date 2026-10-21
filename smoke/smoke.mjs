@@ -164,7 +164,13 @@ try {
   if (readyCode === "timeout") awaitingReady.kill();
   let readied = null;
   try { readied = JSON.parse(readyOut); } catch { /* reported below */ }
-  check("rider await, armed before the flip, exited 0 with the ready event", readyCode === 0 && !!readied?.events?.some((e) => e.kind === "ready" && e.key === key), `${readyCode}: ${readyOut.replace(/\s+/g, " ").trim().slice(0, 160)}`);
+  // The poll's state write lands before its queued event: an await that reads between the two returns no event, with
+  // the wait already ready as its reason. That passes too, once events.jsonl holds the ready event for this wait.
+  const readyLogged = () => readEvents(instanceFile(root3, "await", "default", "events.jsonl")).some((e) => e.kind === "ready" && e.key === key);
+  const woke = !!readied?.events?.some((e) => e.kind === "ready" && e.key === key);
+  const sawReady = readied?.events?.length === 0 && /phase wait is ready/.test(readied.reason ?? "");
+  if (sawReady) for (let i = 0; i < 20 && !readyLogged(); i++) sleepSync(250);
+  check("rider await, armed before the flip, exited 0 with the ready event", readyCode === 0 && (woke || (sawReady && readyLogged())), `${readyCode}: ${readyOut.replace(/\s+/g, " ").trim().slice(0, 160)}`);
   const end = waits("next", "settled", "--on", key, "--because", "smoke: ready.flag exists");
   check("next settled --on <key> ended the run", end.ok !== false && end.state === "operator", end.state ?? end.error ?? JSON.stringify(end).slice(0, 200));
 } catch (e) {

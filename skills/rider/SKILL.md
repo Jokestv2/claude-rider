@@ -70,8 +70,9 @@ rules are unchanged by anything the operator typed.
      failed, the gate it would enter already passes its check, or the phase is not one the graph
      declares — report the failing command and its output to the operator and stop. A failing
      `locate` is often how a rider says there is nothing left to start. A `note:` line above what
-     `start` printed says the rider's `locate` named another phase than the one the operator
-     typed: relay it. Then act on where the run landed:
+     `start` printed says the rider's `locate` disagreed with the phase the operator typed: it
+     named another phase, named none, or failed. The operator's word won; relay the note. Then act
+     on where the run landed:
      - a session (`… started as …`) or a wait (`… awaiting: …`) → arm the watch (step 3) and stop;
      - a human phase (`phase <name> is yours`) → act as in **human**: show the operator the `show`
        output and the check command, and stop. Do not arm the watch: nothing runs there.
@@ -199,8 +200,8 @@ opened when they want it.
 - **An await phase's row** reads what its watcher last stored: the board runs no check.
   - **running**, `awaiting <check> · poll N, last exit 75 at <time>`: the watcher polls it, and
     nothing is to be done.
-  - **needs you**, `watcher not alive`: nothing polls the wait. `rider check --instance <id>`
-    respawns the watcher.
+  - **needs you**, `watcher not alive`: nothing polls the wait. On the operator's word,
+    `rider check --instance <id>` respawns the watcher.
   - **needs you**, `await check failing: …`: the check itself fails, `awaitCheckFailures` times in
     a row (3 by default). Relay the row's reason: it is the operator's to fix.
   - **needs its judge** or **undecided**: a `ready` or `timed-out` wait, decided like a stopped
